@@ -550,6 +550,7 @@ const App = () => {
     const [selectedText, setSelectedText] = useState('');
     const [showSelectedTextMenu, setShowSelectedTextMenu] = useState(false);
     const [selectedTextPosition, setSelectedTextPosition] = useState({ x: 0, y: 0 });
+    const [openOverflowMenu, setOpenOverflowMenu] = useState(null); // Track which node's overflow menu is open
 
     // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
     const handleTextSelection = useCallback(() => {
@@ -1724,17 +1725,28 @@ Suggested title and icon pairs:`;
         }
     };
 
-    const handleDeleteDocument = async () => {
-        if (!db || !userId || !currentDocumentId || !appId) {
-            console.error("Firestore: Database, user, current document, or appId not ready to delete.");
+    const handleDeleteDocument = async (docId = null) => {
+        const documentIdToDelete = docId || currentDocumentId;
+        if (!db || !userId || !documentIdToDelete || !appId) {
+            console.error("Firestore: Database, user, document ID, or appId not ready to delete.");
             return;
         }
-        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, currentDocumentId);
+        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, documentIdToDelete);
         try {
             await deleteDoc(docRef);
-            setSaveStatus('All changes saved');
+            setSaveStatus('Page deleted');
+            // If we deleted the current document, clear the editor
+            if (documentIdToDelete === currentDocumentId) {
+                setCurrentDocumentId(null);
+                setCurrentDocumentContent('');
+                setCurrentDocumentTitle('');
+                setCurrentDocumentTags([]);
+                setCurrentDocumentIcon('');
+                setCurrentDocumentCoverImage('');
+            }
         } catch (e) {
             console.error("Error deleting document: ", e);
+            setSaveStatus('Error deleting page');
         }
     };
 
@@ -2119,7 +2131,7 @@ Instructions:
                 {showDropBefore && (
                     <div 
                         className="h-0.5 bg-blue-500 mx-3 rounded"
-                        style={{ marginLeft: `${12 + level * 20}px` }}
+                        style={{ marginLeft: `${8 + level * 16}px` }}
                     />
                 )}
                 
@@ -2129,23 +2141,16 @@ Instructions:
                     onDragOver={(e) => handleDragOver(e, node)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, node)}
-                    className={`flex items-center py-2 px-3 rounded-md cursor-pointer group transition-all duration-200
+                    className={`flex items-center py-1 px-2 mx-1 rounded-md cursor-pointer group transition-all duration-200
                         ${isSelected 
-                            ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-800') 
-                            : (isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100')
+                            ? (isDarkMode ? 'bg-gray-800 text-gray-100' : 'bg-gray-200 text-gray-900') 
+                            : (isDarkMode ? 'text-gray-300 hover:bg-gray-800' : 'text-gray-700 hover:bg-gray-100')
                         }
-                        ${showDropInside ? (isDarkMode ? 'ring-2 ring-blue-400 bg-blue-900' : 'ring-2 ring-blue-400 bg-blue-50') : ''}
+                        ${showDropInside ? (isDarkMode ? 'ring-1 ring-blue-400 bg-blue-900/20' : 'ring-1 ring-blue-400 bg-blue-50') : ''}
                         ${isDragged ? 'opacity-50' : ''}
                     `}
-                    style={{ paddingLeft: `${12 + level * 20}px` }}
+                    style={{ paddingLeft: `${8 + level * 16}px` }}
                 >
-                    {/* Drag Handle */}
-                    <div className="mr-2 opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing transition-opacity duration-200">
-                        <svg className="w-3 h-3 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                            <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
-                        </svg>
-                    </div>
-                    
                     {/* Expand/Collapse Button */}
                     <button
                         onClick={(e) => {
@@ -2154,8 +2159,12 @@ Instructions:
                                 toggleNodeExpansion(node.id);
                             }
                         }}
-                        className={`w-4 h-4 mr-2 flex items-center justify-center text-xs
-                            ${hasChildren ? 'text-gray-500 hover:text-gray-700' : 'invisible'}`}
+                        className={`w-4 h-4 mr-1 flex items-center justify-center flex-shrink-0
+                            ${hasChildren 
+                                ? (isDarkMode ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-700') 
+                                : 'invisible'
+                            }
+                        `}
                     >
                         {hasChildren && (
                             <svg 
@@ -2170,53 +2179,84 @@ Instructions:
                     
                     {/* Document Icon and Title */}
                     <div 
-                        className="flex-1 flex items-center truncate"
+                        className="flex-1 flex items-center min-w-0"
                         onClick={(e) => {
                             e.stopPropagation();
                             handleDocumentSelect(node.id);
                         }}
                     >
-                        <span className="mr-2 text-sm">
-                            {hasChildren ? '📁' : node.icon}
+                        <span className="mr-2 text-sm flex-shrink-0">
+                            {node.icon || (hasChildren ? '📁' : '📄')}
                         </span>
-                        <span className="truncate">
-                            {node.title || 'New page'}
+                        <span className="truncate text-sm">
+                            {node.title || 'Untitled'}
                         </span>
                     </div>
                     
-                    {/* Add Child Button */}
-                    <button
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            onAddChild(node.id);
-                        }}
-                        className="w-4 h-4 ml-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-gray-400 hover:text-gray-600"
-                        title="Add sub-page"
-                    >
-                        <svg fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-                        </svg>
-                    </button>
-                    
-                    {/* Document Tags */}
-                    {node.tags && node.tags.length > 0 && (
-                        <div className="ml-2 flex flex-wrap gap-1">
-                            {node.tags.slice(0, 2).map((tag, idx) => (
-                                <span key={idx} className={`inline-block px-1.5 py-0.5 rounded text-xs
-                                    ${isDarkMode ? 'bg-gray-700 text-gray-400' : 'bg-gray-100 text-gray-600'}
+                    {/* Hover Actions */}
+                    <div className="flex items-center ml-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        {/* Add Child Button */}
+                        <button
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onAddChild(node.id);
+                            }}
+                            className={`p-1 rounded-md transition-colors flex-shrink-0
+                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                            `}
+                            title="Add sub-page"
+                        >
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                            </svg>
+                        </button>
+                        
+                        {/* Overflow Menu Button */}
+                        <div className="relative overflow-menu">
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setOpenOverflowMenu(openOverflowMenu === node.id ? null : node.id);
+                                }}
+                                className={`p-1 rounded-md transition-colors flex-shrink-0
+                                    ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                                `}
+                                title="More options"
+                            >
+                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+                                </svg>
+                            </button>
+                            
+                            {/* Overflow Menu Dropdown */}
+                            {openOverflowMenu === node.id && (
+                                <div className={`absolute right-0 top-6 z-50 py-1 rounded-md shadow-lg border min-w-32 overflow-menu
+                                    ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}
                                 `}>
-                                    {tag}
-                                </span>
-                            ))}
-                            {node.tags.length > 2 && (
-                                <span className={`inline-block px-1.5 py-0.5 rounded text-xs
-                                    ${isDarkMode ? 'bg-gray-700 text-gray-400' : 'bg-gray-100 text-gray-600'}
-                                `}>
-                                    +{node.tags.length - 2}
-                                </span>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (window.confirm(`Are you sure you want to delete "${node.title || 'Untitled'}"?`)) {
+                                                if (currentDocumentId === node.id) {
+                                                    setCurrentDocumentId(null);
+                                                }
+                                                handleDeleteDocument(node.id);
+                                            }
+                                            setOpenOverflowMenu(null);
+                                        }}
+                                        className={`flex items-center w-full px-3 py-1.5 text-sm text-left transition-colors
+                                            ${isDarkMode ? 'text-red-400 hover:bg-gray-700' : 'text-red-600 hover:bg-gray-100'}
+                                        `}
+                                    >
+                                        <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                        </svg>
+                                        Delete
+                                    </button>
+                                </div>
                             )}
                         </div>
-                    )}
+                    </div>
                 </div>
                 
                 {/* Child Nodes */}
@@ -2237,7 +2277,7 @@ Instructions:
                 {showDropAfter && (
                     <div 
                         className="h-0.5 bg-blue-500 mx-3 rounded"
-                        style={{ marginLeft: `${12 + level * 20}px` }}
+                        style={{ marginLeft: `${8 + level * 16}px` }}
                     />
                 )}
             </div>
@@ -2466,12 +2506,16 @@ Instructions:
             if (showSelectedTextMenu && !event.target.closest('.ask-ai-menu')) {
                 setShowSelectedTextMenu(false);
             }
+            // Close overflow menu when clicking outside
+            if (openOverflowMenu && !event.target.closest('.overflow-menu')) {
+                setOpenOverflowMenu(null);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showSelectedTextMenu]);
+    }, [showSelectedTextMenu, openOverflowMenu]);
 
     if (!isAuthReady) {
         return (
@@ -2497,125 +2541,141 @@ Instructions:
             </div>
 
             {/* Sidebar - Fixed for mobile overlay, relative for desktop */}
-            <div className={`fixed top-0 left-0 h-screen w-3/4 sm:w-1/2 md:relative md:w-1/4
-                ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'} border-r p-4 flex flex-col z-30
+            <div className={`fixed top-0 left-0 h-screen w-80 md:relative md:w-80
+                ${isDarkMode ? 'bg-gray-900 border-gray-800' : 'bg-gray-50 border-gray-200'} border-r flex flex-col z-30
                 ${showSidebarMobile ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 transition-transform duration-300 ease-in-out`}>
+                
                 {/* Close button for mobile sidebar */}
-                <button onClick={() => setShowSidebarMobile(false)} className={`md:hidden absolute top-4 right-4 p-2 rounded-full ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}>
-                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                <button onClick={() => setShowSidebarMobile(false)} className={`md:hidden absolute top-4 right-4 p-2 rounded-md ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-200'} transition-colors`}>
+                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
-                <div className="flex items-center text-lg font-semibold mb-6">
-                    <span className={`mr-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-700'}`}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2Z" fill="currentColor" opacity="0.1" />
-                            <path d="M12 7C9.79086 7 8 8.79086 8 11C8 13.2091 9.79086 15 12 15C14.2091 15 16 13.2091 16 11C16 8.79086 14.2091 7 12 7Z" fill="currentColor" />
-                        </svg>
-                    </span>
-                    <span className={isDarkMode ? 'text-gray-200' : 'text-gray-700'}>My Workspace</span>
-                    {/* Dark mode toggle - hidden on mobile header, shown in desktop sidebar */}
+
+                {/* Workspace Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+                    <div className="flex items-center min-w-0 flex-1">
+                        <div className="w-6 h-6 rounded-sm bg-gradient-to-br from-blue-500 to-purple-600 flex-shrink-0 mr-2 flex items-center justify-center">
+                            <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                        </div>
+                        <span className={`font-medium text-sm truncate ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                            My Workspace
+                        </span>
+                    </div>
                     <button
                         onClick={toggleDarkMode}
-                        className={`ml-auto p-2 rounded-full hidden md:inline-flex
-                            ${isDarkMode ? 'bg-gray-700 text-yellow-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}
-                            transition-colors duration-200`}
+                        className={`p-1.5 rounded-md flex-shrink-0 transition-colors duration-200
+                            ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-600'}
+                        `}
                         title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
                     >
                         {isDarkMode ? (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
                             </svg>
                         ) : (
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                                <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 4a1 1 0 01.293.707l.5 1a1 1 0 11-1.78 1.06L12.5 8.586A8.001 8.001 0 0010 2a8 8 0 100 16 8.001 8.001 0 002.071-15.688l-1.428-1.429A1 1 0 0114 6zm-3.293 3.707a1 1 0 00-1.414 0L6 12.586l-1.293-1.293a1 1 0 10-1.414 1.414l2 2a1 1 0 001.414 0l4-4a1 1 0 000-1.414z" clipRule="evenodd" />
+                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clipRule="evenodd" />
                             </svg>
                         )}
                     </button>
                 </div>
-                <div className={`text-xs mb-4 truncate ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} title={userId}>User ID: {userId}</div>
 
-                {/* Search input */}
-                <input
-                    type="text"
-                    placeholder="Search documents..."
-                    className={`w-full p-2 rounded-md text-sm mb-4
-                        ${isDarkMode ? 'bg-gray-700 text-gray-200 placeholder-gray-400 border-gray-600' : 'bg-white text-gray-800 placeholder-gray-500 border-gray-300'}
-                        border focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                />
+                {/* Navigation Section */}
+                <div className="px-3 py-3 space-y-1">
+                    {/* Search */}
+                    <div className={`flex items-center px-2 py-1.5 rounded-md transition-colors cursor-pointer
+                        ${isDarkMode ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-200 text-gray-700'}
+                    `}>
+                        <svg className="w-4 h-4 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                        <input
+                            type="text"
+                            placeholder="Search"
+                            className={`flex-1 bg-transparent text-sm outline-none placeholder-current
+                                ${isDarkMode ? 'text-gray-300 placeholder-gray-500' : 'text-gray-700 placeholder-gray-500'}
+                            `}
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
+                    </div>
+                </div>
 
-                {/* Template dropdown/buttons */}
-                <div className="relative mb-4" ref={templateMenuRef}>
-                    <button
-                        onClick={() => setShowTemplateMenu(prev => !prev)}
-                        className={`flex items-center px-3 py-2 rounded-md text-sm font-medium w-full justify-center
-                            ${isDarkMode ? 'text-gray-200 bg-gray-700 hover:bg-gray-600' : 'text-gray-700 bg-gray-100 hover:bg-gray-200'}
-                            transition-colors duration-200
-                        `}
-                    >
-                        <span className="mr-2">+</span> Add Page
-                    </button>
-                    {showTemplateMenu && (
-                        <div className={`absolute top-full left-0 w-full z-10 p-1 rounded-md shadow-lg mt-2
-                            ${isDarkMode ? 'bg-gray-700' : 'bg-white border border-gray-200'}`}
+                {/* Private Section */}
+                <div className="px-3">
+                    <div className={`flex items-center justify-between px-2 py-1 mb-2
+                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
+                    `}>
+                        <span className="text-xs font-medium uppercase tracking-wider">Private</span>
+                        <button
+                            onClick={() => setShowTemplateMenu(prev => !prev)}
+                            className={`p-1 rounded-md transition-colors
+                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                            `}
+                            title="Add page"
                         >
-                            {templates.map(template => (
-                                <button
-                                    key={template.name}
-                                    onClick={() => handleAddDocument(template)}
-                                    className={`flex items-center w-full px-3 py-1.5 rounded-md text-xs text-left
-                                        ${isDarkMode ? 'text-gray-300 hover:bg-gray-600' : 'text-gray-700 hover:bg-gray-100'}
-                                        transition-colors duration-200
-                                    `}
-                                >
-                                    {template.name}
-                                </button>
-                            ))}
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    {/* Template dropdown */}
+                    {showTemplateMenu && (
+                        <div className={`absolute left-4 right-4 z-50 rounded-md shadow-lg border mt-1
+                            ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}
+                        `} ref={templateMenuRef}>
+                            <div className="p-2">
+                                {templates.map(template => (
+                                    <button
+                                        key={template.name}
+                                        onClick={() => handleAddDocument(template)}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-sm text-left transition-colors
+                                            ${isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}
+                                        `}
+                                    >
+                                        <svg className="w-4 h-4 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                        </svg>
+                                        {template.name}
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>
 
-                {/* Hierarchical Document Tree */}
-                <div className="flex-grow overflow-y-auto custom-scrollbar">
+                {/* Documents List */}
+                <div className="flex-grow overflow-y-auto px-1">
                     {/* Filter by search but show hierarchical tree */}
                     {filteredDocuments.length === 0 && documents.length === 0 && (
-                        <div className={`italic text-sm p-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No documents found.</div>
+                        <div className={`text-sm px-2 py-3 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                            No pages inside
+                        </div>
                     )}
                     {filteredDocuments.length === 0 && documents.length > 0 && (
-                        <div className={`italic text-sm p-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>No matching documents.</div>
+                        <div className={`text-sm px-2 py-3 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                            No matching pages
+                        </div>
                     )}
                     
                     {/* Show tree structure (filtered if search is active) */}
-                    {(() => {
-                        // If there's a search, build tree from filtered results only
-                        const treeToRender = searchTerm.trim() ? buildDocumentTree(filteredDocuments) : documentTree;
-                        
-                        return treeToRender.map(node => (
-                            <TreeNode 
-                                key={node.id} 
-                                node={node} 
-                                level={0} 
-                                onAddChild={(parentId) => handleAddDocument({ name: 'Blank Page', title: '', content: '' }, parentId)}
-                            />
-                        ));
-                    })()}
-                    
-                    {/* Delete button for selected document */}
-                    {currentDocumentId && (
-                        <div className="mt-4 pt-2 border-t border-gray-300">
-                            <button
-                                onClick={handleDeleteDocument}
-                                className={`w-full flex items-center justify-center py-2 px-3 rounded-md text-sm font-medium transition-colors duration-200
-                                    ${isDarkMode ? 'bg-red-900 text-red-300 hover:bg-red-800' : 'bg-red-50 text-red-700 hover:bg-red-100'}
-                                `}
-                            >
-                                <svg className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                                Delete Page
-                            </button>
-                        </div>
-                    )}
+                    <div className="space-y-0.5">
+                        {(() => {
+                            // If there's a search, build tree from filtered results only
+                            const treeToRender = searchTerm.trim() ? buildDocumentTree(filteredDocuments) : documentTree;
+                            
+                            return treeToRender.map(node => (
+                                <TreeNode 
+                                    key={node.id} 
+                                    node={node} 
+                                    level={0} 
+                                    onAddChild={(parentId) => handleAddDocument({ name: 'Blank Page', title: '', content: '' }, parentId)}
+                                />
+                            ));
+                        })()}
+                    </div>
                 </div>
             </div>
 
