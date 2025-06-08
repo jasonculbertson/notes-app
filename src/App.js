@@ -520,6 +520,9 @@ const App = () => {
 
     const [llmResponse, setLlmResponse] = useState('');
     const [llmLoading, setLlmLoading] = useState(false);
+    const [llmLoadingMessage, setLlmLoadingMessage] = useState('');
+    const [suggestedTitles, setSuggestedTitles] = useState([]);
+    const [isLoadingTitleSuggestions, setIsLoadingTitleSuggestions] = useState(false);
     const [llmQuestion, setLlmQuestion] = useState('');
     const [saveStatus, setSaveStatus] = useState('All changes saved'); // New state for save status
     const [chatHistory, setChatHistory] = useState([]); // Store conversation history
@@ -555,50 +558,58 @@ const App = () => {
         // Small delay to ensure selection is finalized
         setTimeout(() => {
             const selection = window.getSelection();
-            const selectedText = selection.toString().trim();
+            const selectedTextContent = selection.toString().trim();
             
-            console.log("Selected text:", selectedText, "Length:", selectedText.length);
+            console.log("Selected text:", selectedTextContent, "Length:", selectedTextContent.length);
             
-            if (selectedText.length > 0 && selection.rangeCount > 0) {
-                // Check if selection is within the editor area
-                const editorElement = editorElementRef.current;
-                if (editorElement) {
-                    const range = selection.getRangeAt(0);
-                    const selectionContainer = range.commonAncestorContainer;
-                    
-                    // Check if selection is within our editor
-                    if (editorElement.contains(selectionContainer) || 
-                        (selectionContainer.nodeType === Node.TEXT_NODE && editorElement.contains(selectionContainer.parentNode))) {
+            if (selectedTextContent.length > 3 && selection.rangeCount > 0) { // Require at least 3 characters
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                
+                // Check if the selection is visible and has dimensions
+                if (rect.width > 0 && rect.height > 0) {
+                    // Check if selection is within the editor area
+                    const editorElement = editorElementRef.current;
+                    if (editorElement) {
+                        const selectionContainer = range.commonAncestorContainer;
                         
-                        const rect = range.getBoundingClientRect();
-                        console.log("Selection position:", rect);
+                        // More robust check for whether selection is within editor
+                        const isWithinEditor = editorElement.contains(selectionContainer) || 
+                            (selectionContainer.nodeType === Node.TEXT_NODE && 
+                             editorElement.contains(selectionContainer.parentNode)) ||
+                            // Also check if any part of the range intersects with editor
+                            editorElement.contains(range.startContainer) ||
+                            editorElement.contains(range.endContainer);
                         
-                        // Ensure we have a valid rectangle
-                        if (rect.width > 0 && rect.height > 0) {
-                            setSelectedText(selectedText);
+                        if (isWithinEditor) {
+                            console.log("Valid selection within editor detected");
+                            setSelectedText(selectedTextContent);
                             setSelectedTextPosition({
-                                x: Math.max(50, rect.left + (rect.width / 2)), // Ensure minimum distance from edge
-                                y: Math.max(50, rect.top - 50) // Position above selection with minimum top margin
+                                x: Math.max(50, Math.min(window.innerWidth - 150, rect.left + (rect.width / 2))), // Keep within screen bounds
+                                y: Math.max(50, rect.top - 60) // Position above selection with margin
                             });
                             setShowSelectedTextMenu(true);
                             console.log("Showing selected text menu at position:", {
                                 x: rect.left + (rect.width / 2),
-                                y: rect.top - 50
+                                y: rect.top - 60
                             });
                             return;
+                        } else {
+                            console.log("Selection not within editor area");
                         }
                     }
+                } else {
+                    console.log("Selection has no visible dimensions");
                 }
+            } else {
+                console.log("Selection too short or no range:", selectedTextContent.length);
             }
             
             // Hide menu if no valid selection
-            if (showSelectedTextMenu) {
-                setShowSelectedTextMenu(false);
-                setSelectedText('');
-                console.log("Hiding selected text menu");
-            }
-        }, 10); // Small delay to ensure selection is complete
-    }, [showSelectedTextMenu]); // Dependencies for useCallback
+            setShowSelectedTextMenu(false);
+            setSelectedText('');
+        }, 50); // Slightly longer delay to ensure selection is complete
+    }, []); // No dependencies needed since we're using state setters directly
 
     // Emoji categories and data for icon picker
     const emojiCategories = {
@@ -1105,12 +1116,7 @@ const App = () => {
                     // Save editor reference
                     editorRef.current = editor;
 
-                    // Add text selection listeners for contextual Q&A
-                    // Attach to document to catch all text selections
-                    document.addEventListener('mouseup', handleTextSelection);
-                    document.addEventListener('keyup', handleTextSelection);
-                    console.log("Text selection listeners attached to document");
-                    console.log("handleTextSelection function:", handleTextSelection);
+                    console.log("Editor.js initialized successfully - text selection listeners managed separately");
 
                     console.log("Editor.js initialized successfully");
                 } catch (error) {
@@ -1192,12 +1198,30 @@ const App = () => {
                 editorRef.current.destroy();
                 editorRef.current = null;
             }
-            // Remove text selection listeners
+        };
+    }, [isAuthReady]); // Removed handleTextSelection dependency
+
+    // Separate useEffect for text selection listeners
+    useEffect(() => {
+        console.log("Setting up text selection listeners");
+        
+        // Add text selection listeners for contextual Q&A
+        document.addEventListener('mouseup', handleTextSelection);
+        document.addEventListener('keyup', handleTextSelection);
+        
+        // Also add selectionchange for better detection
+        document.addEventListener('selectionchange', handleTextSelection);
+        
+        console.log("Text selection listeners attached to document");
+        
+        // Cleanup
+        return () => {
             document.removeEventListener('mouseup', handleTextSelection);
             document.removeEventListener('keyup', handleTextSelection);
+            document.removeEventListener('selectionchange', handleTextSelection);
             console.log("Text selection listeners removed");
         };
-            }, [isAuthReady, handleTextSelection]); // Add handleTextSelection dependency
+    }, [handleTextSelection]); // This useEffect depends on handleTextSelection
 
     // Separate useEffect to update editor content when document changes
     useEffect(() => {
@@ -1375,6 +1399,93 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
             setCurrentDocumentTags([...currentDocumentTags, tag]);
             setSuggestedTags(suggestedTags.filter(t => t !== tag));
         }
+    };
+
+    const getSuggestedTitles = async () => {
+        if (!currentDocumentContent?.trim()) {
+            return;
+        }
+
+        setIsLoadingTitleSuggestions(true);
+        const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
+        
+        if (!apiKey) {
+            setIsLoadingTitleSuggestions(false);
+            return;
+        }
+
+        try {
+            // Convert editor content to plain text for analysis
+            let contentText = '';
+            try {
+                const parsed = JSON.parse(currentDocumentContent);
+                if (parsed.blocks) {
+                    contentText = convertEditorToPlainText(parsed);
+                } else {
+                    contentText = convertHtmlToPlainText(currentDocumentContent);
+                }
+            } catch (e) {
+                contentText = convertHtmlToPlainText(currentDocumentContent);
+            }
+
+            // Get available emojis for context
+            const availableEmojis = Object.values(emojiCategories).flat().slice(0, 100).join(' ');
+
+            const prompt = `You are a helpful AI assistant that suggests document titles and matching icons. Based on the content below, suggest 4 concise, descriptive titles with matching emojis.
+
+DOCUMENT CONTENT:
+${contentText.slice(0, 2000)} ${contentText.length > 2000 ? '...' : ''}
+
+AVAILABLE EMOJIS (choose from these):
+${availableEmojis}
+
+Requirements:
+- Each title should be 2-8 words long
+- Titles should be descriptive and professional
+- Choose emojis that match the content theme (work, ideas, notes, projects, etc.)
+- Format: "EMOJI|Title Text" (example: "📝|Meeting Notes")
+- Return only 4 suggestions, one per line
+
+Suggested title and icon pairs:`;
+
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ role: "user", parts: [{ text: prompt }] }]
+                })
+            });
+
+            const result = await response.json();
+            
+            if (result.candidates && result.candidates[0] && result.candidates[0].content && result.candidates[0].content.parts[0]) {
+                const suggestionsText = result.candidates[0].content.parts[0].text;
+                const suggestions = suggestionsText
+                    .split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line && line.includes('|'))
+                    .map(line => {
+                        const [emoji, title] = line.split('|').map(part => part.trim());
+                        return { emoji, title };
+                    })
+                    .filter(suggestion => suggestion.emoji && suggestion.title)
+                    .slice(0, 4); // Limit to 4 suggestions
+                
+                setSuggestedTitles(suggestions);
+            }
+        } catch (error) {
+            console.error('Error getting title suggestions:', error);
+        } finally {
+            setIsLoadingTitleSuggestions(false);
+        }
+    };
+
+    const applySuggestedTitle = (suggestion) => {
+        setCurrentDocumentTitle(suggestion.title);
+        if (suggestion.emoji) {
+            updateDocumentIcon(suggestion.emoji);
+        }
+        setSuggestedTitles([]);
     };
 
     // Icon picker functionality
@@ -1734,6 +1845,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
         }
 
         setLlmLoading(true);
+        setLlmLoadingMessage('Preparing your question...');
         
         // Add user question to chat history
         const userMessage = { role: "user", parts: [{ text: question }] };
@@ -1745,11 +1857,12 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
 
         const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
         if (!apiKey) {
-            const errorMsg = "API key not found. Please set REACT_APP_GEMINI_API_KEY in your environment.";
+            const errorMsg = "❌ Configuration Error: API key not found. Please set REACT_APP_GEMINI_API_KEY in your environment.";
             setLlmResponse(errorMsg);
             // Add error to chat history
             setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
             setLlmLoading(false);
+            setLlmLoadingMessage('');
             return;
         }
 
@@ -1758,13 +1871,40 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
 
         // If we have context text (selected text), handle it specially
         if (contextText) {
-            // For selected text queries, start fresh conversation with context
-            conversationContext = `Based on the following selected text, answer this question: "${question}"
+            setLlmLoadingMessage('Searching document for selected text...');
+            
+            // Get current document content for context
+            let documentContent = '';
+            if (currentDocumentContent) {
+                try {
+                    const parsed = JSON.parse(currentDocumentContent);
+                    if (parsed.blocks) {
+                        documentContent = convertEditorToPlainText(parsed);
+                    } else {
+                        documentContent = convertHtmlToPlainText(currentDocumentContent);
+                    }
+                } catch (e) {
+                    documentContent = convertHtmlToPlainText(currentDocumentContent);
+                }
+            }
+            
+            // For selected text queries, include both selected text and document context
+            conversationContext = `You are a helpful AI assistant. I need you to provide information about the selected text, using the full document content for context.
 
-Selected text:
-"${contextText}"
+QUESTION: ${question}
 
-Please provide a clear, helpful answer based specifically on the selected content.`;
+SELECTED TEXT: "${contextText}"
+
+FULL DOCUMENT CONTENT:
+${documentContent}
+
+Instructions:
+- Focus on the selected text: "${contextText}"
+- Use the full document content to provide comprehensive information
+- If the selected text appears elsewhere in the document, mention that
+- Provide relevant background information from the document
+- If the selected text refers to something (person, place, concept), explain it based on the document context
+- Be informative and helpful`;
 
             payload = {
                 contents: [{ role: "user", parts: [{ text: conversationContext }] }]
@@ -1772,12 +1912,15 @@ Please provide a clear, helpful answer based specifically on the selected conten
         } else {
             // Original document-based query with conversation history
             if (documents.length === 0) {
-                const errorMsg = "There are no documents to ask questions about. Please create some pages first.";
+                const errorMsg = "📝 No Documents Found: Please create some pages first to use the AI assistant.";
                 setLlmResponse(errorMsg);
                 setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
                 setLlmLoading(false);
+                setLlmLoadingMessage('');
                 return;
             }
+
+            setLlmLoadingMessage('Processing your documents...');
 
             // Build context from documents (only if this is the first message in conversation)
             if (newChatHistory.length === 1) {
@@ -1799,10 +1942,18 @@ Please provide a clear, helpful answer based specifically on the selected conten
                     return `Document: ${doc.title || 'Untitled'}\nContent: ${content}\nTags: ${(doc.tags || []).join(', ')}`;
                 }).join('\n\n---\n\n');
 
-                const contextualQuestion = `Based on my notes/documents below, ${question}
+                const contextualQuestion = `You are a helpful AI assistant analyzing a user's personal notes and documents. Please provide accurate, helpful responses based on the content provided.
 
-My Documents:
-${documentsText}`;
+USER QUESTION: ${question}
+
+DOCUMENT COLLECTION:
+${documentsText}
+
+Instructions:
+- Answer based on the documents provided above
+- If the answer isn't in the documents, clearly state that
+- Be specific and reference relevant document titles when helpful
+- Provide a clear, well-structured response`;
 
                 // Include recent chat history (last 8 messages to manage token usage)
                 const recentHistory = newChatHistory.slice(-1);
@@ -1817,6 +1968,8 @@ ${documentsText}`;
 
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
+        setLlmLoadingMessage('Connecting to AI...');
+        
         try {
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -1837,17 +1990,25 @@ ${documentsText}`;
                 setChatHistory([...newChatHistory, aiMessage]);
                 
             } else {
-                const errorMsg = "I couldn't generate a response. Please try again.";
+                const errorMsg = "⚠️ AI Response Error: I couldn't generate a response. Please try again.";
                 setLlmResponse(errorMsg);
                 setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
             }
         } catch (error) {
             console.error("Error calling Gemini API:", error);
-            const errorMsg = "Error: Unable to get AI response. Please check your connection and API key.";
+            let errorMsg = "🔌 Connection Error: Unable to reach AI service. ";
+            if (error.message.includes('fetch')) {
+                errorMsg += "Please check your internet connection.";
+            } else if (error.message.includes('API key')) {
+                errorMsg += "Please verify your API key is correct.";
+            } else {
+                errorMsg += "Please try again in a moment.";
+            }
             setLlmResponse(errorMsg);
             setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
         } finally {
             setLlmLoading(false);
+            setLlmLoadingMessage('');
         }
     };
 
@@ -2606,7 +2767,68 @@ ${documentsText}`;
                                     onChange={(e) => setCurrentDocumentTitle(e.target.value)}
                                     placeholder="New page"
                                 />
+                                {currentDocumentContent?.trim() && (
+                                    <button
+                                        onClick={getSuggestedTitles}
+                                        disabled={isLoadingTitleSuggestions}
+                                        className={`ml-2 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center gap-1
+                                            ${isDarkMode ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-500 text-white hover:bg-blue-600'}
+                                            disabled:opacity-50 disabled:cursor-not-allowed
+                                        `}
+                                        title="Generate title suggestions based on content"
+                                    >
+                                        {isLoadingTitleSuggestions ? (
+                                            <>
+                                                <div className="animate-spin rounded-full h-3 w-3 border-t border-white"></div>
+                                                <span>AI...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                </svg>
+                                                <span>Title</span>
+                                            </>
+                                        )}
+                                    </button>
+                                )}
                             </div>
+                            
+                            {/* AI Suggested Titles */}
+                            {suggestedTitles.length > 0 && (
+                                <div className="mt-3">
+                                    <div className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                        💡 AI Title & Icon Suggestions:
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        {suggestedTitles.map((suggestion, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => applySuggestedTitle(suggestion)}
+                                                className={`text-left p-3 rounded-lg border transition-all duration-200 hover:scale-[1.02]
+                                                    ${isDarkMode 
+                                                        ? 'bg-blue-900/20 border-blue-700/30 text-blue-300 hover:bg-blue-900/30 hover:border-blue-600' 
+                                                        : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100 hover:border-blue-300'
+                                                    }
+                                                `}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    {suggestion.emoji && (
+                                                        <span className="text-lg">{suggestion.emoji}</span>
+                                                    )}
+                                                    <div className="font-medium text-sm flex-1">{suggestion.title}</div>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <button
+                                        onClick={() => setSuggestedTitles([])}
+                                        className={`mt-2 text-xs ${isDarkMode ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-600'} transition-colors`}
+                                    >
+                                        ✕ Dismiss suggestions
+                                    </button>
+                                </div>
+                            )}
                             
                             {/* Icon Picker */}
                             {showIconPicker && (
@@ -2746,28 +2968,30 @@ ${documentsText}`;
                                             }
                                         }}
                                     />
-                                    <button
-                                        onClick={getSuggestedTags}
-                                        disabled={isLoadingSuggestions || !currentDocumentContent?.trim()}
-                                        className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 flex items-center gap-1
-                                            ${isDarkMode ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-500 text-white hover:bg-purple-600'}
-                                            disabled:opacity-50 disabled:cursor-not-allowed
-                                        `}
-                                    >
-                                        {isLoadingSuggestions ? (
-                                            <>
-                                                <div className="animate-spin rounded-full h-3 w-3 border-t border-white"></div>
-                                                <span>AI...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                                </svg>
-                                                <span>AI Tags</span>
-                                            </>
-                                        )}
-                                    </button>
+                                    {currentDocumentContent?.trim() && (
+                                        <button
+                                            onClick={getSuggestedTags}
+                                            disabled={isLoadingSuggestions}
+                                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 flex items-center gap-1
+                                                ${isDarkMode ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-500 text-white hover:bg-purple-600'}
+                                                disabled:opacity-50 disabled:cursor-not-allowed
+                                            `}
+                                        >
+                                            {isLoadingSuggestions ? (
+                                                <>
+                                                    <div className="animate-spin rounded-full h-3 w-3 border-t border-white"></div>
+                                                    <span>AI...</span>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                    </svg>
+                                                    <span>AI Tags</span>
+                                                </>
+                                            )}
+                                        </button>
+                                    )}
                                 </div>
                                 {/* AI Suggested Tags */}
                                 {suggestedTags.length > 0 && (
@@ -2806,39 +3030,64 @@ ${documentsText}`;
                     {/* Floating Ask AI Button for Selected Text */}
                     {showSelectedTextMenu && (
                         <div 
-                            className="ask-ai-menu fixed z-50 bg-blue-500 text-white px-3 py-2 rounded-lg shadow-lg cursor-pointer hover:bg-blue-600 transition-colors duration-200 flex items-center gap-2"
+                            className={`fixed cursor-pointer px-2 py-1.5 rounded shadow-lg flex items-center gap-1.5 transition-all duration-200 hover:scale-105
+                                ${isDarkMode 
+                                    ? 'bg-gray-700 text-gray-100 border border-gray-600' 
+                                    : 'bg-gray-800 text-white border border-gray-700'
+                                }`}
                             style={{
-                                left: selectedTextPosition.x - 50,
-                                top: selectedTextPosition.y - 50
+                                left: selectedTextPosition.x,
+                                top: selectedTextPosition.y - 2, // Almost touching - just 2px above
+                                transform: 'translateX(-50%)', // Only center horizontally
+                                zIndex: 10000,
+                                fontSize: '11px',
+                                fontWeight: '500',
+                                whiteSpace: 'nowrap',
+                                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
                             }}
-                            onClick={() => {
-                                const question = prompt('What would you like to know about the selected text?');
-                                if (question && question.trim()) {
+                            onMouseDown={(e) => {
+                                console.log("Ask AI tooltip mousedown!");
+                                e.preventDefault();
+                                e.stopPropagation();
+                                
+                                // Automatically ask about the selected text
+                                const question = `Tell me about "${selectedText}"`;
+                                console.log("Auto-generated question:", question);
+                                console.log("Selected text:", selectedText);
+                                console.log("askLlm function:", typeof askLlm);
+                                
+                                // Hide the menu first
+                                setShowSelectedTextMenu(false);
+                                
+                                // Call askLlm
+                                try {
                                     askLlm(question, selectedText);
-                                    setShowSelectedTextMenu(false);
+                                    console.log("askLlm called successfully");
+                                } catch (error) {
+                                    console.error("Error calling askLlm:", error);
                                 }
                             }}
                         >
-                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                             </svg>
-                            <span className="text-sm font-medium">Ask AI</span>
+                            <span>Ask AI</span>
+                            {/* Arrow pointing down to selection */}
+                            <div 
+                                className="absolute pointer-events-none"
+                                style={{
+                                    top: '100%',
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    width: 0,
+                                    height: 0,
+                                    borderLeft: '4px solid transparent',
+                                    borderRight: '4px solid transparent',
+                                    borderTop: `4px solid ${isDarkMode ? '#374151' : '#1f2937'}`
+                                }}
+                            />
                         </div>
                     )}
-
-                    {/* Debug button - temporary */}
-                    <button 
-                        onClick={() => {
-                            console.log("Manual test triggered");
-                            console.log("showSelectedTextMenu:", showSelectedTextMenu);
-                            console.log("selectedText:", selectedText);
-                            console.log("editorElementRef.current:", editorElementRef.current);
-                            handleTextSelection();
-                        }}
-                        className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded"
-                    >
-                        Test Selection (Debug)
-                    </button>
 
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
@@ -2929,7 +3178,9 @@ ${documentsText}`;
                     {llmLoading && (
                         <div className="flex items-center justify-center mt-4">
                             <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
-                            <span className={`ml-2 text-sm ${isDarkMode ? 'text-blue-400' : 'text-blue-500'}`}>Thinking...</span>
+                            <span className={`ml-2 text-sm ${isDarkMode ? 'text-blue-400' : 'text-blue-500'}`}>
+                                {llmLoadingMessage || 'Thinking...'}
+                            </span>
                         </div>
                     )}
                 </div>
@@ -2951,10 +3202,15 @@ ${documentsText}`;
                     onClick={() => askLlm()}
                     className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
                         disabled:opacity-50 disabled:cursor-not-allowed`}
-                    disabled={llmLoading || documents.length === 0}
+                    disabled={llmLoading || documents.length === 0 || llmQuestion.trim().length < 3}
                 >
                     Generate Response
                 </button>
+                {llmQuestion.trim().length > 0 && llmQuestion.trim().length < 3 && (
+                    <p className={`text-xs mt-1 text-center ${isDarkMode ? 'text-yellow-300' : 'text-yellow-600'}`}>
+                        Please enter at least 3 characters
+                    </p>
+                )}
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
                 )}
