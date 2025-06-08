@@ -526,6 +526,7 @@ const App = () => {
     const [llmQuestion, setLlmQuestion] = useState('');
     const [saveStatus, setSaveStatus] = useState('All changes saved'); // New state for save status
     const [chatHistory, setChatHistory] = useState([]); // Store conversation history
+    const [externalSearchSuggestions, setExternalSearchSuggestions] = useState([]); // External search suggestions
 
     // New states for added features
     const [searchTerm, setSearchTerm] = useState(''); // State for document search query
@@ -1859,6 +1860,9 @@ Suggested title and icon pairs:`;
         setLlmLoading(true);
         setLlmLoadingMessage('Preparing your question...');
         
+        // Clear previous search suggestions
+        setExternalSearchSuggestions([]);
+        
         // Add user question to chat history
         const userMessage = { role: "user", parts: [{ text: question }] };
         const newChatHistory = [...chatHistory, userMessage];
@@ -1916,10 +1920,35 @@ Instructions:
 - If the selected text appears elsewhere in the document, mention that
 - Provide relevant background information from the document
 - If the selected text refers to something (person, place, concept), explain it based on the document context
-- Be informative and helpful`;
+- Be informative and helpful
+- Also suggest 3-5 concise search terms for finding additional information online
+
+IMPORTANT: Return your response as a JSON object with exactly this structure:
+{
+  "answer": "Your comprehensive answer here",
+  "search_terms": ["search term 1", "search term 2", "search term 3"]
+}`;
 
             payload = {
-                contents: [{ role: "user", parts: [{ text: conversationContext }] }]
+                contents: [{ role: "user", parts: [{ text: conversationContext }] }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            answer: {
+                                type: "STRING"
+                            },
+                            search_terms: {
+                                type: "ARRAY",
+                                items: {
+                                    type: "STRING"
+                                }
+                            }
+                        },
+                        required: ["answer", "search_terms"]
+                    }
+                }
             };
         } else {
             // Original document-based query with conversation history
@@ -1965,12 +1994,39 @@ Instructions:
 - Answer based on the documents provided above
 - If the answer isn't in the documents, clearly state that
 - Be specific and reference relevant document titles when helpful
-- Provide a clear, well-structured response`;
+- Provide a clear, well-structured response
+- Also suggest 3-5 concise search terms for finding additional information online
+
+IMPORTANT: Return your response as a JSON object with exactly this structure:
+{
+  "answer": "Your comprehensive answer here",
+  "search_terms": ["search term 1", "search term 2", "search term 3"]
+}`;
 
                 // Include recent chat history (last 8 messages to manage token usage)
                 const recentHistory = newChatHistory.slice(-1);
                 recentHistory[0] = { role: "user", parts: [{ text: contextualQuestion }] };
-                payload = { contents: recentHistory };
+                payload = { 
+                    contents: recentHistory,
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                answer: {
+                                    type: "STRING"
+                                },
+                                search_terms: {
+                                    type: "ARRAY",
+                                    items: {
+                                        type: "STRING"
+                                    }
+                                }
+                            },
+                            required: ["answer", "search_terms"]
+                        }
+                    }
+                };
             } else {
                 // Continuing conversation - use recent history without re-adding document context
                 const recentHistory = newChatHistory.slice(-8); // Last 8 messages
@@ -1994,16 +2050,42 @@ Instructions:
                 result.candidates[0].content && result.candidates[0].content.parts &&
                 result.candidates[0].content.parts.length > 0) {
                 
-                const aiResponse = result.candidates[0].content.parts[0].text;
-                setLlmResponse(aiResponse);
+                const aiResponseText = result.candidates[0].content.parts[0].text;
                 
-                // Add AI response to chat history
-                const aiMessage = { role: "model", parts: [{ text: aiResponse }] };
-                setChatHistory([...newChatHistory, aiMessage]);
+                try {
+                    // Try to parse as structured JSON response
+                    const parsedResponse = JSON.parse(aiResponseText);
+                    
+                    if (parsedResponse.answer && parsedResponse.search_terms) {
+                        // Structured response received
+                        setLlmResponse(parsedResponse.answer);
+                        setExternalSearchSuggestions(parsedResponse.search_terms || []);
+                        
+                        // Add AI response to chat history (store the answer part)
+                        const aiMessage = { role: "model", parts: [{ text: parsedResponse.answer }] };
+                        setChatHistory([...newChatHistory, aiMessage]);
+                    } else {
+                        // Fallback: treat as regular text response
+                        setLlmResponse(aiResponseText);
+                        setExternalSearchSuggestions([]);
+                        
+                        const aiMessage = { role: "model", parts: [{ text: aiResponseText }] };
+                        setChatHistory([...newChatHistory, aiMessage]);
+                    }
+                } catch (parseError) {
+                    // Fallback: treat as regular text response if JSON parsing fails
+                    console.log('Response not in JSON format, treating as plain text');
+                    setLlmResponse(aiResponseText);
+                    setExternalSearchSuggestions([]);
+                    
+                    const aiMessage = { role: "model", parts: [{ text: aiResponseText }] };
+                    setChatHistory([...newChatHistory, aiMessage]);
+                }
                 
             } else {
                 const errorMsg = "⚠️ AI Response Error: I couldn't generate a response. Please try again.";
                 setLlmResponse(errorMsg);
+                setExternalSearchSuggestions([]);
                 setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
             }
         } catch (error) {
@@ -2017,6 +2099,7 @@ Instructions:
                 errorMsg += "Please try again in a moment.";
             }
             setLlmResponse(errorMsg);
+            setExternalSearchSuggestions([]);
             setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
         } finally {
             setLlmLoading(false);
@@ -3199,6 +3282,7 @@ Instructions:
                             onClick={() => {
                                 setChatHistory([]);
                                 setLlmResponse('');
+                                setExternalSearchSuggestions([]);
                             }}
                             className={`px-2 py-1 text-xs rounded-md transition-colors duration-200
                                 ${isDarkMode ? 'bg-gray-600 text-gray-300 hover:bg-gray-500' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}
@@ -3244,6 +3328,38 @@ Instructions:
                         </div>
                     )}
                 </div>
+
+                {/* External Search Suggestions */}
+                {externalSearchSuggestions.length > 0 && (
+                    <div className={`mb-4 p-3 rounded-md border ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-blue-50 border-blue-200'}`}>
+                        <h4 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-200' : 'text-blue-800'}`}>
+                            🔍 Explore More Online
+                        </h4>
+                        <div className="flex flex-wrap gap-2">
+                            {externalSearchSuggestions.map((term, index) => (
+                                <a
+                                    key={index}
+                                    href={`https://www.google.com/search?q=${encodeURIComponent(term)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={`px-3 py-1.5 text-xs rounded-full transition-colors duration-200 hover:scale-105 transform
+                                        ${isDarkMode 
+                                            ? 'bg-gray-600 text-gray-200 hover:bg-gray-500' 
+                                            : 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                                        }
+                                    `}
+                                    title={`Search Google for "${term}"`}
+                                >
+                                    {term}
+                                </a>
+                            ))}
+                        </div>
+                        <p className={`text-xs mt-2 opacity-75 ${isDarkMode ? 'text-gray-400' : 'text-blue-600'}`}>
+                            Click any term to search for more information online
+                        </p>
+                    </div>
+                )}
+
                 <input
                     type="text"
                     className={`w-full p-2.5 rounded-md border focus:outline-none focus:ring-1 focus:ring-blue-400 mb-3 text-sm placeholder-gray-400

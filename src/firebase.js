@@ -3,12 +3,12 @@ import { getFirestore } from 'firebase/firestore';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-    apiKey: "AIzaSyB03xYU6iyg-y8JjQdJHxv4qwQc3_20x0E",
-    authDomain: "notes-app-33f99.firebaseapp.com",
-    projectId: "notes-app-33f99",
-    storageBucket: "notes-app-33f99.firebasestorage.app",
-    messagingSenderId: "48692428369",
-    appId: "1:48692428369:web:5f9abeab4bb8e1fc1c8270", // This is important for the path in your rules
+    apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+    authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.REACT_APP_FIREBASE_APP_ID,
     // measurementId: "G-XXXXXXXXXX" // If you enabled Analytics
 };
 
