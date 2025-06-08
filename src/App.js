@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from './firebase';
 
 // Main App component
 // Simple Rich Text Editor using contentEditable
@@ -481,16 +482,101 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         isInitialized: true,
         updateContent: (newContent) => {
             if (editor) {
-                editor.innerHTML = newContent || '';
+                // Save current cursor position
+                const selection = window.getSelection();
+                let cursorPosition = 0;
+                let restoreCursor = false;
+                
+                if (selection.rangeCount > 0 && editor.contains(selection.anchorNode)) {
+                    restoreCursor = true;
+                    const range = selection.getRangeAt(0);
+                    cursorPosition = range.startOffset;
+                    
+                    // Create a temporary element to calculate text offset
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = editor.innerHTML;
+                    const textContent = tempDiv.textContent || tempDiv.innerText || '';
+                    
+                    // Find the text offset position
+                    let textOffset = 0;
+                    const walker = document.createTreeWalker(
+                        editor,
+                        NodeFilter.SHOW_TEXT,
+                        null,
+                        false
+                    );
+                    
+                    let node;
+                    while (node = walker.nextNode()) {
+                        if (node === selection.anchorNode) {
+                            textOffset += cursorPosition;
+                            break;
+                        }
+                        textOffset += node.textContent.length;
+                    }
+                    cursorPosition = textOffset;
+                }
+                
+                // Only update if content has actually changed
+                const currentContent = editor.innerHTML;
+                const normalizedNewContent = newContent || '';
+                
+                if (currentContent !== normalizedNewContent) {
+                    editor.innerHTML = normalizedNewContent;
+                    
+                    // Restore cursor position
+                    if (restoreCursor && normalizedNewContent) {
+                        try {
+                            const walker = document.createTreeWalker(
+                                editor,
+                                NodeFilter.SHOW_TEXT,
+                                null,
+                                false
+                            );
+                            
+                            let node;
+                            let currentOffset = 0;
+                            let targetNode = null;
+                            let targetOffset = 0;
+                            
+                            while (node = walker.nextNode()) {
+                                const nodeLength = node.textContent.length;
+                                if (currentOffset + nodeLength >= cursorPosition) {
+                                    targetNode = node;
+                                    targetOffset = cursorPosition - currentOffset;
+                                    break;
+                                }
+                                currentOffset += nodeLength;
+                            }
+                            
+                            if (targetNode) {
+                                const range = document.createRange();
+                                const selection = window.getSelection();
+                                range.setStart(targetNode, Math.min(targetOffset, targetNode.textContent.length));
+                                range.collapse(true);
+                                selection.removeAllRanges();
+                                selection.addRange(range);
+                            }
+                        } catch (error) {
+                            console.log('Could not restore cursor position:', error);
+                            // Fallback: focus the editor
+                            editor.focus();
+                        }
+                    }
+                }
+                
                 // Update placeholder
-                const isEmpty = !newContent || newContent.trim() === '' || newContent === '<br>' || newContent === '<p><br></p>';
+                const isEmpty = !normalizedNewContent || normalizedNewContent.trim() === '' || normalizedNewContent === '<br>' || normalizedNewContent === '<p><br></p>';
                 if (isEmpty) {
                     editor.setAttribute('data-placeholder', 'Start writing your note...');
                 } else {
                     editor.removeAttribute('data-placeholder');
                 }
-                // Save to undo stack
-                saveToUndoStack(newContent || '');
+                
+                // Save to undo stack only if content actually changed
+                if (currentContent !== normalizedNewContent) {
+                    saveToUndoStack(normalizedNewContent);
+                }
             }
         },
         cleanup: () => {
@@ -553,6 +639,23 @@ const App = () => {
     const [selectedTextPosition, setSelectedTextPosition] = useState({ x: 0, y: 0 });
     const [openOverflowMenu, setOpenOverflowMenu] = useState(null); // Track which node's overflow menu is open
 
+    // File Management States - Phase 1: File Upload
+    const [uploadedFiles, setUploadedFiles] = useState([]);
+    const [isUploadingFile, setIsUploadingFile] = useState(false);
+    const [fileUploadProgress, setFileUploadProgress] = useState('');
+    const [showFilesSection, setShowFilesSection] = useState(true);
+    
+    // Phase 2: File Content Analysis
+    const [isProcessingFileContent, setIsProcessingFileContent] = useState(false);
+    const [fileContentProcessingProgress, setFileContentProcessingProgress] = useState('');
+    
+    // File Management States - Phase 2: Google Links
+    const [googleLinks, setGoogleLinks] = useState([]);
+    const [showAddGoogleLinkModal, setShowAddGoogleLinkModal] = useState(false);
+    const [googleLinkTitle, setGoogleLinkTitle] = useState('');
+    const [googleLinkUrl, setGoogleLinkUrl] = useState('');
+    const [showGoogleLinksSection, setShowGoogleLinksSection] = useState(true);
+
     // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
     const handleTextSelection = useCallback(() => {
         console.log("Text selection handler triggered");
@@ -612,6 +715,177 @@ const App = () => {
             setSelectedText('');
         }, 50); // Slightly longer delay to ensure selection is complete
     }, []); // No dependencies needed since we're using state setters directly
+
+    // Helper function to convert HTML to plain text
+    const convertHtmlToPlainText = useCallback((html) => {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        return doc.body.textContent || "";
+    }, []);
+
+    // Helper function to convert HTML/text to Editor.js format
+    const convertToEditorFormat = useCallback((content) => {
+        if (!content) return { blocks: [] };
+        
+        // If it's already Editor.js format, return as is
+        try {
+            const parsed = JSON.parse(content);
+            if (parsed.blocks) {
+                console.log('Content is already in Editor.js format, returning as-is');
+                return parsed;
+            }
+        } catch (e) {
+            console.log('Content is not JSON, converting from HTML/text');
+        }
+
+        const blocks = [];
+        
+        // Simple conversion from HTML/text to Editor.js blocks
+        if (content.includes('<')) {
+            // HTML content - simple conversion
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = content;
+            
+            const elements = tempDiv.children.length > 0 ? Array.from(tempDiv.children) : [tempDiv];
+            
+            for (const element of elements) {
+                const tagName = element.tagName?.toLowerCase();
+                const text = element.textContent || element.innerText || '';
+                
+                if (!text.trim()) continue;
+                
+                switch (tagName) {
+                    case 'h1':
+                        blocks.push({ type: 'header', data: { text, level: 1 } });
+                        break;
+                    case 'h2':
+                        blocks.push({ type: 'header', data: { text, level: 2 } });
+                        break;
+                    case 'h3':
+                        blocks.push({ type: 'header', data: { text, level: 3 } });
+                        break;
+                    case 'ul':
+                        const listItems = Array.from(element.querySelectorAll('li')).map(li => li.textContent);
+                        blocks.push({ type: 'list', data: { style: 'unordered', items: listItems } });
+                        break;
+                    case 'ol':
+                        const orderedItems = Array.from(element.querySelectorAll('li')).map(li => li.textContent);
+                        blocks.push({ type: 'list', data: { style: 'ordered', items: orderedItems } });
+                        break;
+                    case 'blockquote':
+                        blocks.push({ type: 'quote', data: { text, caption: '' } });
+                        break;
+                    default:
+                        blocks.push({ type: 'paragraph', data: { text } });
+                }
+            }
+        } else {
+            // Plain text - split by lines
+            const lines = content.split('\n').filter(line => line.trim());
+            for (const line of lines) {
+                blocks.push({ type: 'paragraph', data: { text: line.trim() } });
+            }
+        }
+        
+        return { blocks };
+    }, []);
+
+    // Helper function to convert Editor.js data to plain text
+    const convertEditorToPlainText = useCallback((editorData) => {
+        if (!editorData || !editorData.blocks) return '';
+        
+        return editorData.blocks.map(block => {
+            switch (block.type) {
+                case 'header':
+                    return block.data.text || '';
+                case 'paragraph':
+                    return block.data.text || '';
+                case 'list':
+                    return (block.data.items || []).join('\n');
+                case 'quote':
+                    return block.data.text || '';
+                case 'code':
+                    return block.data.code || '';
+                case 'checklist':
+                    return (block.data.items || []).map(item => item.text).join('\n');
+                default:
+                    return '';
+            }
+        }).filter(text => text.trim()).join('\n\n');
+    }, []);
+
+    // Phase 2: File Content Extraction
+    const extractFileContent = useCallback(async (file, downloadURL) => {
+        const fileType = file.type.toLowerCase();
+        const fileName = file.name.toLowerCase();
+        
+        try {
+            setFileContentProcessingProgress(`Processing ${file.name}...`);
+            
+            // Handle text files
+            if (fileType.includes('text/plain') || fileName.endsWith('.txt')) {
+                const response = await fetch(downloadURL);
+                const text = await response.text();
+                return text;
+            }
+            
+            // Handle PDF files (basic extraction - client-side)
+            if (fileType.includes('pdf') || fileName.endsWith('.pdf')) {
+                setFileContentProcessingProgress(`Extracting text from PDF: ${file.name}...`);
+                // For now, return a placeholder - PDF extraction requires additional libraries
+                return `[PDF FILE: ${file.name}]\nThis PDF file has been uploaded but text extraction is not yet implemented. The file contains ${Math.round(file.size / 1024)}KB of data.`;
+            }
+            
+            // Handle Word documents
+            if (fileType.includes('document') || fileType.includes('word') || 
+                fileName.endsWith('.doc') || fileName.endsWith('.docx')) {
+                setFileContentProcessingProgress(`Extracting text from Word document: ${file.name}...`);
+                // For now, return a placeholder - Word extraction requires additional libraries
+                return `[WORD DOCUMENT: ${file.name}]\nThis Word document has been uploaded but text extraction is not yet implemented. The file contains ${Math.round(file.size / 1024)}KB of data.`;
+            }
+            
+            // Handle JSON files
+            if (fileType.includes('json') || fileName.endsWith('.json')) {
+                const response = await fetch(downloadURL);
+                const jsonText = await response.text();
+                const jsonData = JSON.parse(jsonText);
+                return `[JSON FILE: ${file.name}]\n${JSON.stringify(jsonData, null, 2)}`;
+            }
+            
+            // Handle CSV files
+            if (fileType.includes('csv') || fileName.endsWith('.csv')) {
+                const response = await fetch(downloadURL);
+                const csvText = await response.text();
+                return `[CSV FILE: ${file.name}]\n${csvText}`;
+            }
+            
+            // Handle markdown files
+            if (fileName.endsWith('.md') || fileName.endsWith('.markdown')) {
+                const response = await fetch(downloadURL);
+                const text = await response.text();
+                return `[MARKDOWN FILE: ${file.name}]\n${text}`;
+            }
+            
+            // Handle other text-based files
+            if (fileType.includes('text/') || 
+                fileName.endsWith('.js') || fileName.endsWith('.ts') || 
+                fileName.endsWith('.jsx') || fileName.endsWith('.tsx') ||
+                fileName.endsWith('.css') || fileName.endsWith('.html') ||
+                fileName.endsWith('.xml') || fileName.endsWith('.yaml') ||
+                fileName.endsWith('.yml') || fileName.endsWith('.log')) {
+                const response = await fetch(downloadURL);
+                const text = await response.text();
+                return `[${fileType.toUpperCase()} FILE: ${file.name}]\n${text}`;
+            }
+            
+            // Unsupported file type
+            return `[BINARY FILE: ${file.name}]\nThis file type (${fileType}) is not supported for text extraction. File size: ${Math.round(file.size / 1024)}KB.`;
+            
+        } catch (error) {
+            console.error('Error extracting file content:', error);
+            return `[ERROR: ${file.name}]\nFailed to extract content from this file. Error: ${error.message}`;
+        }
+    }, []);
 
     // Emoji categories and data for icon picker
     const emojiCategories = {
@@ -799,14 +1073,24 @@ const App = () => {
     // Refs for Editor.js
     const editorRef = useRef(null); // Reference to the Editor.js instance
     const editorElementRef = useRef(null); // Reference to the div element where Editor.js will be mounted
+    
+    // File Management Refs
+    const fileInputRef = useRef(null); // Reference to the hidden file input
 
     // Load Editor.js dynamically
     useEffect(() => {
-        // Load Editor.js CSS
+        // Load Editor.js CSS with fallback
         if (!document.querySelector('link[href*="editorjs"]')) {
             const editorCSS = document.createElement('link');
             editorCSS.rel = 'stylesheet';
             editorCSS.href = 'https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.28.2/dist/editor.css';
+            editorCSS.onerror = () => {
+                console.log("CSS fallback to unpkg");
+                const fallbackCSS = document.createElement('link');
+                fallbackCSS.rel = 'stylesheet';
+                fallbackCSS.href = 'https://unpkg.com/@editorjs/editorjs@2.28.2/dist/editor.css';
+                document.head.appendChild(fallbackCSS);
+            };
             document.head.appendChild(editorCSS);
         }
 
@@ -854,33 +1138,70 @@ const App = () => {
             try {
                 console.log("Starting to load Editor.js...");
                 
-                // Load Editor.js core with specific version
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.28.2/dist/editor.js', 'EditorJS');
+                // Load Editor.js core with specific version - using unpkg as fallback
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.28.2/dist/editor.js', 'EditorJS');
+                } catch (e) {
+                    console.log("jsdelivr failed, trying unpkg...");
+                    await loadScript('https://unpkg.com/@editorjs/editorjs@2.28.2/dist/editor.js', 'EditorJS');
+                }
                 console.log("Editor.js core loaded");
                 
                 // Load plugins with specific versions
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/header@2.7.0/dist/bundle.js', 'Header');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/header@2.7.0/dist/bundle.js', 'Header');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/header@2.7.0/dist/bundle.js', 'Header');
+                }
                 console.log("Header plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/list@1.8.0/dist/bundle.js', 'List');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/list@1.8.0/dist/bundle.js', 'List');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/list@1.8.0/dist/bundle.js', 'List');
+                }
                 console.log("List plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/checklist@1.5.0/dist/bundle.js', 'Checklist');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/checklist@1.5.0/dist/bundle.js', 'Checklist');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/checklist@1.5.0/dist/bundle.js', 'Checklist');
+                }
                 console.log("Checklist plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/quote@2.5.0/dist/bundle.js', 'Quote');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/quote@2.5.0/dist/bundle.js', 'Quote');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/quote@2.5.0/dist/bundle.js', 'Quote');
+                }
                 console.log("Quote plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/code@2.8.0/dist/bundle.js', 'CodeTool');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/code@2.8.0/dist/bundle.js', 'CodeTool');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/code@2.8.0/dist/bundle.js', 'CodeTool');
+                }
                 console.log("Code plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.3.0/dist/bundle.js', 'Delimiter');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.3.0/dist/bundle.js', 'Delimiter');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/delimiter@1.3.0/dist/bundle.js', 'Delimiter');
+                }
                 console.log("Delimiter plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/marker@1.3.0/dist/bundle.js', 'Marker');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/marker@1.3.0/dist/bundle.js', 'Marker');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/marker@1.3.0/dist/bundle.js', 'Marker');
+                }
                 console.log("Marker plugin loaded");
                 
-                await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/inline-code@1.4.0/dist/bundle.js', 'InlineCode');
+                try {
+                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/inline-code@1.4.0/dist/bundle.js', 'InlineCode');
+                } catch (e) {
+                    await loadScript('https://unpkg.com/@editorjs/inline-code@1.4.0/dist/bundle.js', 'InlineCode');
+                }
                 console.log("InlineCode plugin loaded");
                 
                 console.log("All Editor.js plugins loaded successfully");
@@ -898,23 +1219,31 @@ const App = () => {
     useEffect(() => {
         try {
             const firebaseConfig = {
-                apiKey: "AIzaSyB03xYU6iyg-y8JjQdJHxv4qwQc3_20x0E",
-                authDomain: "notes-app-33f99.firebaseapp.com",
-                projectId: "notes-app-33f99",
-                storageBucket: "notes-app-33f99.appspot.com", // Changed to .appspot.com for better CORS support
-                messagingSenderId: "48692428369",
-                appId: "1:48692428369:web:5f9abeab4bb8e1fc1c8270",
+                apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
+                authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
+                projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
+                storageBucket: process.env.REACT_APP_FIREBASE_STORAGE_BUCKET,
+                messagingSenderId: process.env.REACT_APP_FIREBASE_MESSAGING_SENDER_ID,
+                appId: process.env.REACT_APP_FIREBASE_APP_ID,
             };
+
+            // Validate that all required environment variables are present
+            const requiredEnvVars = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
+            const missingVars = requiredEnvVars.filter(key => !firebaseConfig[key]);
+            
+            if (missingVars.length > 0) {
+                console.error('Missing required Firebase environment variables:', missingVars);
+                console.error('Please check your .env file contains all required REACT_APP_FIREBASE_* variables');
+                return;
+            }
             
             setAppId(firebaseConfig.appId);
             const app = initializeApp(firebaseConfig);
             const firestore = getFirestore(app);
             const firebaseAuth = getAuth(app);
-            const storage = getStorage(app);
 
             setDb(firestore);
-            window.firebaseStorage = storage; // Make storage available globally
-            console.log('Firebase Storage initialized:', !!storage);
+            console.log('Firebase initialized successfully');
 
             const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
                 if (user) {
@@ -1013,6 +1342,56 @@ const App = () => {
 
         return () => unsubscribe();
     }, [isAuthReady, db, userId, appId, currentDocumentId]);
+
+    // Listen for uploaded files
+    useEffect(() => {
+        if (!isAuthReady || !db || !appId) {
+            return;
+        }
+
+        const activeUserId = userId || 'anonymous-user';
+        const uploadedFilesCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
+        console.log("Firestore: Subscribing to uploaded files at path:", `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
+
+        const unsubscribe = onSnapshot(uploadedFilesCollectionRef, (snapshot) => {
+            const fetchedFiles = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            fetchedFiles.sort((a, b) => (b.uploadDate?.toDate() || new Date()) - (a.uploadDate?.toDate() || new Date()));
+            setUploadedFiles(fetchedFiles);
+            console.log("Uploaded files updated:", fetchedFiles.length);
+        }, (error) => {
+            console.error("Error listening to uploaded files:", error);
+        });
+
+        return unsubscribe;
+    }, [isAuthReady, db, userId, appId]);
+
+    // Listen for Google links
+    useEffect(() => {
+        if (!isAuthReady || !db || !appId) {
+            return;
+        }
+
+        const activeUserId = userId || 'anonymous-user';
+        const googleLinksCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/google_links`);
+        console.log("Firestore: Subscribing to Google links at path:", `artifacts/${appId}/users/${activeUserId}/google_links`);
+
+        const unsubscribe = onSnapshot(googleLinksCollectionRef, (snapshot) => {
+            const fetchedLinks = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            fetchedLinks.sort((a, b) => (b.addDate?.toDate() || new Date()) - (a.addDate?.toDate() || new Date()));
+            setGoogleLinks(fetchedLinks);
+            console.log("Google links updated:", fetchedLinks.length);
+        }, (error) => {
+            console.error("Error listening to Google links:", error);
+        });
+
+        return unsubscribe;
+    }, [isAuthReady, db, userId, appId]);
 
     // Fetch content of the current document and initialize Quill
     useEffect(() => {
@@ -1257,13 +1636,21 @@ const App = () => {
                 }
                          } else if (editorElementRef.current?._richEditor) {
                 // Update rich text editor content using the updateContent method
-                editorElementRef.current._richEditor.updateContent(currentDocumentContent || '');
-                console.log("Rich text editor content updated for document:", currentDocumentId);
+                // Only update if content has actually changed to prevent cursor jumping
+                const currentEditorContent = editorElementRef.current._richEditor.editor?.innerHTML || '';
+                const newContent = currentDocumentContent || '';
+                
+                if (currentEditorContent !== newContent) {
+                    editorElementRef.current._richEditor.updateContent(newContent);
+                    console.log("Rich text editor content updated for document:", currentDocumentId);
+                } else {
+                    console.log("Rich text editor content unchanged, skipping update");
+                }
             }
         };
 
         updateEditorContent();
-    }, [currentDocumentId, currentDocumentContent]); // Update when document or content changes
+    }, [currentDocumentId, currentDocumentContent, convertToEditorFormat]); // Added missing dependencies
 
     // Auto-scroll LLM response to bottom
     useEffect(() => {
@@ -1275,6 +1662,11 @@ const App = () => {
     // Autosave mechanism
     useEffect(() => {
         if (!isAuthReady || !db || !userId || !currentDocumentId || !appId) {
+            return;
+        }
+
+        // Don't trigger save if content is empty on initial load
+        if (!currentDocumentContent && !currentDocumentTitle && currentDocumentTags.length === 0) {
             return;
         }
 
@@ -1290,9 +1682,13 @@ const App = () => {
                 await updateDoc(docRef, {
                     content: currentDocumentContent,
                     title: currentDocumentTitle || 'Untitled',
-                    tags: currentDocumentTags
+                    tags: currentDocumentTags,
+                    updatedAt: new Date()
                 });
                 setSaveStatus('All changes saved');
+                
+                // Don't reload the content after save to prevent cursor jumping
+                console.log("Document saved without triggering content reload");
             } catch (e) {
                 setSaveStatus('Save error!');
                 console.error("Error autosaving document: ", e);
@@ -1530,8 +1926,6 @@ Suggested title and icon pairs:`;
         }
     };
 
-    
-
     const compressImage = (file, maxWidth = 1200, quality = 0.8) => {
         return new Promise((resolve) => {
             const canvas = document.createElement('canvas');
@@ -1639,9 +2033,206 @@ Suggested title and icon pairs:`;
         }
     };
 
+    // File Management Functions - Phase 1: File Upload
+    const handleFileUpload = async (event) => {
+        const files = event.target.files;
+        if (!files || files.length === 0) return;
 
+        // Use anonymous userId if none available
+        const activeUserId = userId || 'anonymous-user';
+        console.log('File upload starting with userId:', activeUserId);
+        setIsUploadingFile(true);
+        setFileUploadProgress('Preparing upload...');
 
-    // Build hierarchical tree structure from flat documents array
+        try {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                setFileUploadProgress(`Uploading ${file.name} (${i + 1}/${files.length})`);
+
+                // Create unique filename to avoid collisions
+                const uniqueFileName = `${file.name}_${crypto.randomUUID()}`;
+                const filePath = `user_uploads/${activeUserId}/uploaded_docs/${uniqueFileName}`;
+
+                // Create storage reference
+                const storageRef = ref(storage, filePath);
+
+                // Upload file
+                await uploadBytes(storageRef, file);
+
+                // Get download URL
+                const downloadURL = await getDownloadURL(storageRef);
+
+                // Phase 2: Extract file content for LLM analysis
+                setFileUploadProgress(`Extracting content from ${file.name}...`);
+                const extractedContent = await extractFileContent(file, downloadURL);
+
+                // Save metadata to Firestore (including extracted content)
+                const fileMetadata = {
+                    id: crypto.randomUUID(),
+                    fileName: file.name,
+                    fileType: file.type,
+                    fileSize: file.size,
+                    downloadURL: downloadURL,
+                    uploadDate: Timestamp.now(),
+                    associatedPageId: currentDocumentId || null,
+                    // Phase 2: Store extracted content for LLM
+                    extractedContent: extractedContent,
+                    contentExtracted: true,
+                    lastProcessed: Timestamp.now()
+                };
+
+                await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`), fileMetadata);
+                console.log(`File ${file.name} uploaded successfully`);
+            }
+
+            setFileUploadProgress('Upload complete!');
+            setSaveStatus(`${files.length} file(s) uploaded successfully`);
+        } catch (error) {
+            console.error('Error uploading files:', error);
+            setFileUploadProgress('Upload failed');
+            setSaveStatus('Error uploading files');
+        } finally {
+            setIsUploadingFile(false);
+            // Clear the file input
+            if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+            }
+            // Clear progress message after 3 seconds
+            setTimeout(() => {
+                setFileUploadProgress('');
+                setFileContentProcessingProgress('');
+            }, 3000);
+        }
+    };
+
+    const triggerFileUpload = () => {
+        if (fileInputRef.current) {
+            fileInputRef.current.click();
+        }
+    };
+
+    const handleDeleteFile = async (fileId) => {
+        if (!window.confirm('Are you sure you want to delete this file?')) return;
+
+        try {
+            const activeUserId = userId || 'anonymous-user';
+            // Delete from Firestore
+            await deleteDoc(doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, fileId));
+            setSaveStatus('File deleted');
+        } catch (error) {
+            console.error('Error deleting file:', error);
+            setSaveStatus('Error deleting file');
+        }
+    };
+
+    // Phase 2: Re-analyze file content
+    const handleReprocessFile = async (file) => {
+        try {
+            setIsProcessingFileContent(true);
+            setFileContentProcessingProgress(`Re-analyzing ${file.fileName}...`);
+
+            // Extract content from the file
+            const extractedContent = await extractFileContent(file, file.downloadURL);
+
+            // Update the file metadata in Firestore
+            const activeUserId = userId || 'anonymous-user';
+            const fileDoc = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, file.id);
+            
+            await updateDoc(fileDoc, {
+                extractedContent: extractedContent,
+                contentExtracted: true,
+                lastProcessed: Timestamp.now()
+            });
+
+            setFileContentProcessingProgress('');
+            setSaveStatus('File re-analyzed successfully');
+        } catch (error) {
+            console.error('Error reprocessing file:', error);
+            setFileContentProcessingProgress('');
+            setSaveStatus('Error re-analyzing file');
+        } finally {
+            setIsProcessingFileContent(false);
+        }
+    };
+
+    const getFileIcon = (fileType) => {
+        if (fileType.startsWith('image/')) return '🖼️';
+        if (fileType.includes('pdf')) return '📄';
+        if (fileType.includes('word') || fileType.includes('document')) return '📝';
+        if (fileType.includes('excel') || fileType.includes('spreadsheet')) return '📊';
+        if (fileType.includes('powerpoint') || fileType.includes('presentation')) return '📊';
+        if (fileType.includes('text')) return '📄';
+        if (fileType.includes('zip') || fileType.includes('archive')) return '📦';
+        return '📁';
+    };
+
+    const formatFileSize = (bytes) => {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    // File Management Functions - Phase 2: Google Links
+    const handleAddGoogleLink = async (title, url) => {
+        if (!title.trim() || !url.trim()) {
+            alert('Please enter both title and URL');
+            return;
+        }
+
+        // Basic URL validation
+        if (!url.startsWith('https://docs.google.com') && !url.startsWith('https://sheets.google.com')) {
+            alert('Please enter a valid Google Docs or Sheets URL');
+            return;
+        }
+
+        try {
+            const linkType = url.includes('docs.google.com') ? 'google_doc' : 'google_sheet';
+
+            const linkMetadata = {
+                id: crypto.randomUUID(),
+                title: title.trim(),
+                url: url.trim(),
+                linkType: linkType,
+                addDate: Timestamp.now(),
+                associatedPageId: currentDocumentId || null
+            };
+
+            const activeUserId = userId || 'anonymous-user';
+            await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/google_links`), linkMetadata);
+            console.log('Google link added successfully');
+
+            // Reset form
+            setGoogleLinkTitle('');
+            setGoogleLinkUrl('');
+            setShowAddGoogleLinkModal(false);
+            setSaveStatus('Google link added successfully');
+        } catch (error) {
+            console.error('Error adding Google link:', error);
+            setSaveStatus('Error adding Google link');
+        }
+    };
+
+    const handleDeleteGoogleLink = async (linkId) => {
+        if (!window.confirm('Are you sure you want to delete this link?')) return;
+
+        try {
+            const activeUserId = userId || 'anonymous-user';
+            await deleteDoc(doc(db, `artifacts/${appId}/users/${activeUserId}/google_links`, linkId));
+            setSaveStatus('Link deleted');
+        } catch (error) {
+            console.error('Error deleting link:', error);
+            setSaveStatus('Error deleting link');
+        }
+    };
+
+    const getLinkIcon = (linkType) => {
+        if (linkType === 'google_doc') return '📄';
+        if (linkType === 'google_sheet') return '📊';
+        return '🔗';
+    };
+
     const buildDocumentTree = (docs) => {
         const tree = [];
         const docMap = {};
@@ -1751,102 +2342,7 @@ Suggested title and icon pairs:`;
         }
     };
 
-    const convertHtmlToPlainText = (html) => {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        return doc.body.textContent || "";
-    };
 
-    // Helper function to convert HTML/text to Editor.js format
-    const convertToEditorFormat = (content) => {
-        if (!content) return { blocks: [] };
-        
-        // If it's already Editor.js format, return as is
-        try {
-            const parsed = JSON.parse(content);
-            if (parsed.blocks) {
-                console.log('Content is already in Editor.js format, returning as-is');
-                return parsed;
-            }
-        } catch (e) {
-            console.log('Content is not JSON, converting from HTML/text');
-        }
-
-        const blocks = [];
-        
-        // Simple conversion from HTML/text to Editor.js blocks
-        if (content.includes('<')) {
-            // HTML content - simple conversion
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = content;
-            
-            const elements = tempDiv.children.length > 0 ? Array.from(tempDiv.children) : [tempDiv];
-            
-            for (const element of elements) {
-                const tagName = element.tagName?.toLowerCase();
-                const text = element.textContent || element.innerText || '';
-                
-                if (!text.trim()) continue;
-                
-                switch (tagName) {
-                    case 'h1':
-                        blocks.push({ type: 'header', data: { text, level: 1 } });
-                        break;
-                    case 'h2':
-                        blocks.push({ type: 'header', data: { text, level: 2 } });
-                        break;
-                    case 'h3':
-                        blocks.push({ type: 'header', data: { text, level: 3 } });
-                        break;
-                    case 'ul':
-                        const listItems = Array.from(element.querySelectorAll('li')).map(li => li.textContent);
-                        blocks.push({ type: 'list', data: { style: 'unordered', items: listItems } });
-                        break;
-                    case 'ol':
-                        const orderedItems = Array.from(element.querySelectorAll('li')).map(li => li.textContent);
-                        blocks.push({ type: 'list', data: { style: 'ordered', items: orderedItems } });
-                        break;
-                    case 'blockquote':
-                        blocks.push({ type: 'quote', data: { text, caption: '' } });
-                        break;
-                    default:
-                        blocks.push({ type: 'paragraph', data: { text } });
-                }
-            }
-        } else {
-            // Plain text - split by lines
-            const lines = content.split('\n').filter(line => line.trim());
-            for (const line of lines) {
-                blocks.push({ type: 'paragraph', data: { text: line.trim() } });
-            }
-        }
-        
-        return { blocks };
-    };
-
-    // Helper function to convert Editor.js data to plain text
-    const convertEditorToPlainText = (editorData) => {
-        if (!editorData || !editorData.blocks) return '';
-        
-        return editorData.blocks.map(block => {
-            switch (block.type) {
-                case 'header':
-                    return block.data.text || '';
-                case 'paragraph':
-                    return block.data.text || '';
-                case 'list':
-                    return (block.data.items || []).join('\n');
-                case 'quote':
-                    return block.data.text || '';
-                case 'code':
-                    return block.data.code || '';
-                case 'checklist':
-                    return (block.data.items || []).map(item => item.text).join('\n');
-                default:
-                    return '';
-            }
-        }).filter(text => text.trim()).join('\n\n');
-    };
 
     const askLlm = async (customQuestion = null, contextText = null) => {
         // Ensure question is a string
@@ -1983,17 +2479,27 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     return `Document: ${doc.title || 'Untitled'}\nContent: ${content}\nTags: ${(doc.tags || []).join(', ')}`;
                 }).join('\n\n---\n\n');
 
-                const contextualQuestion = `You are a helpful AI assistant analyzing a user's personal notes and documents. Please provide accurate, helpful responses based on the content provided.
+                // Phase 2: Include uploaded file contents
+                const uploadedFilesText = uploadedFiles.filter(file => file.extractedContent).map(file => {
+                    return `Uploaded File: ${file.fileName}\nFile Type: ${file.fileType}\nSize: ${Math.round(file.fileSize / 1024)}KB\nContent:\n${file.extractedContent}`;
+                }).join('\n\n---\n\n');
+
+                // Combine documents and files
+                const allContent = [documentsText, uploadedFilesText].filter(text => text.trim()).join('\n\n===== UPLOADED FILES =====\n\n');
+
+                const contextualQuestion = `You are a helpful AI assistant analyzing a user's personal notes, documents, and uploaded files. Please provide accurate, helpful responses based on the content provided.
 
 USER QUESTION: ${question}
 
-DOCUMENT COLLECTION:
-${documentsText}
+COMPLETE KNOWLEDGE BASE:
+${allContent}
 
 Instructions:
-- Answer based on the documents provided above
-- If the answer isn't in the documents, clearly state that
-- Be specific and reference relevant document titles when helpful
+- Answer based on the documents and uploaded files provided above
+- You have access to both notes/documents and uploaded file contents
+- If the answer isn't in the provided content, clearly state that
+- Be specific and reference relevant document titles and file names when helpful
+- Cross-reference information between documents and uploaded files when relevant
 - Provide a clear, well-structured response
 - Also suggest 3-5 concise search terms for finding additional information online
 
@@ -2368,23 +2874,22 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
     };
 
     // Generate breadcrumb path for current document
-    const getBreadcrumbPath = (docId) => {
+    const getBreadcrumbPath = useCallback((docId) => {
         if (!docId || !documents.length) return [];
         
         const path = [];
-        let currentDoc = documents.find(doc => doc.id === docId);
+        let currentDocId = docId;
         
-        while (currentDoc) {
+        while (currentDocId) {
+            const currentDoc = documents.find(doc => doc.id === currentDocId);
+            if (!currentDoc) break;
+            
             path.unshift(currentDoc);
-            if (currentDoc.parentId) {
-                currentDoc = documents.find(doc => doc.id === currentDoc.parentId);
-            } else {
-                break;
-            }
+            currentDocId = currentDoc.parentId;
         }
         
         return path;
-    };
+    }, [documents]);
 
     // Drag and drop handlers
     const handleDragStart = (e, node) => {
@@ -2759,6 +3264,201 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                             ));
                         })()}
                     </div>
+                </div>
+
+                {/* File Management Sections */}
+                {/* Files Section */}
+                <div className="px-3 border-t border-gray-200 dark:border-gray-800 pt-3">
+                    <div className={`flex items-center justify-between px-2 py-1 mb-2
+                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
+                    `}>
+                        <button
+                            onClick={() => setShowFilesSection(prev => !prev)}
+                            className="flex items-center text-xs font-medium uppercase tracking-wider"
+                        >
+                            <svg className={`w-3 h-3 mr-1 transition-transform ${showFilesSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>
+                            </svg>
+                            Files ({uploadedFiles.length})
+                        </button>
+                        <button
+                            onClick={triggerFileUpload}
+                            className={`p-1 rounded-md transition-colors
+                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                            `}
+                            title="Upload file"
+                            disabled={isUploadingFile}
+                        >
+                            {isUploadingFile ? (
+                                <div className="animate-spin rounded-full h-4 w-4 border-t border-current"></div>
+                            ) : (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                </svg>
+                            )}
+                        </button>
+                    </div>
+
+                    {/* Upload Progress */}
+                    {(fileUploadProgress || fileContentProcessingProgress) && (
+                        <div className={`px-2 py-1 mb-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                            {fileUploadProgress || fileContentProcessingProgress}
+                        </div>
+                    )}
+
+                    {/* Files List */}
+                    {showFilesSection && (
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                            {uploadedFiles.length === 0 ? (
+                                <div className={`text-xs px-2 py-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                                    No files uploaded
+                                </div>
+                            ) : (
+                                uploadedFiles.map(file => (
+                                    <div key={file.id} className={`flex items-center px-2 py-1.5 rounded-md transition-colors group
+                                        ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}
+                                    `}>
+                                        <span className="text-lg mr-2">{getFileIcon(file.fileType)}</span>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => window.open(file.downloadURL, '_blank')}
+                                                    className={`text-sm truncate flex-1 text-left hover:underline
+                                                        ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
+                                                    `}
+                                                    title={file.fileName}
+                                                >
+                                                    {file.fileName}
+                                                </button>
+                                                {/* Phase 2: AI Analysis Indicator */}
+                                                {file.contentExtracted && (
+                                                    <span 
+                                                        className="text-green-500 text-xs" 
+                                                        title="Content analyzed for AI assistant"
+                                                    >
+                                                        🧠
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                                                {formatFileSize(file.fileSize)}
+                                                {file.contentExtracted && (
+                                                    <span className="ml-2 text-green-600">• AI Ready</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            {/* Phase 2: Re-analyze button for files without content */}
+                                            {!file.contentExtracted && (
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleReprocessFile(file);
+                                                    }}
+                                                    className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
+                                                        ${isDarkMode ? 'hover:bg-blue-700 text-blue-400' : 'hover:bg-blue-200 text-blue-600'}
+                                                    `}
+                                                    title="Analyze for AI assistant"
+                                                    disabled={isProcessingFileContent}
+                                                >
+                                                    🧠
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleDeleteFile(file.id);
+                                                }}
+                                                className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
+                                                    ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                                                `}
+                                                title="Delete file"
+                                            >
+                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+                </div>
+
+                {/* Google Links Section */}
+                <div className="px-3 border-t border-gray-200 dark:border-gray-800 pt-3">
+                    <div className={`flex items-center justify-between px-2 py-1 mb-2
+                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
+                    `}>
+                        <button
+                            onClick={() => setShowGoogleLinksSection(prev => !prev)}
+                            className="flex items-center text-xs font-medium uppercase tracking-wider"
+                        >
+                            <svg className={`w-3 h-3 mr-1 transition-transform ${showGoogleLinksSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>
+                            </svg>
+                            Google Links ({googleLinks.length})
+                        </button>
+                        <button
+                            onClick={() => setShowAddGoogleLinkModal(true)}
+                            className={`p-1 rounded-md transition-colors
+                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                            `}
+                            title="Add Google link"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    {/* Google Links List */}
+                    {showGoogleLinksSection && (
+                        <div className="space-y-1 max-h-32 overflow-y-auto">
+                            {googleLinks.length === 0 ? (
+                                <div className={`text-xs px-2 py-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                                    No Google links added
+                                </div>
+                            ) : (
+                                googleLinks.map(link => (
+                                    <div key={link.id} className={`flex items-center px-2 py-1.5 rounded-md transition-colors group
+                                        ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}
+                                    `}>
+                                        <span className="text-lg mr-2">{getLinkIcon(link.linkType)}</span>
+                                        <div className="flex-1 min-w-0">
+                                            <button
+                                                onClick={() => window.open(link.url, '_blank')}
+                                                className={`text-sm truncate block w-full text-left hover:underline
+                                                    ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
+                                                `}
+                                                title={link.title}
+                                            >
+                                                {link.title}
+                                            </button>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                                                {link.linkType === 'google_doc' ? 'Google Doc' : 'Google Sheet'}
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteGoogleLink(link.id);
+                                            }}
+                                            className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
+                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                                            `}
+                                            title="Delete link"
+                                        >
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -3690,6 +4390,96 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 }
                 `}
             </style>
+
+            {/* Hidden File Input */}
+            <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                multiple
+                style={{ display: 'none' }}
+                accept="*/*"
+            />
+
+            {/* Google Link Modal */}
+            {showAddGoogleLinkModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className={`rounded-lg p-6 w-full max-w-md mx-4 ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
+                        <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                            Add Google Link
+                        </h3>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className={`block text-sm font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                    Title
+                                </label>
+                                <input
+                                    type="text"
+                                    value={googleLinkTitle}
+                                    onChange={(e) => setGoogleLinkTitle(e.target.value)}
+                                    placeholder="e.g., Meeting Notes"
+                                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500
+                                        ${isDarkMode 
+                                            ? 'bg-gray-700 border-gray-600 text-gray-100 placeholder-gray-400' 
+                                            : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                                        }
+                                    `}
+                                />
+                            </div>
+                            
+                            <div>
+                                <label className={`block text-sm font-medium mb-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                    Google Docs/Sheets URL
+                                </label>
+                                <input
+                                    type="url"
+                                    value={googleLinkUrl}
+                                    onChange={(e) => setGoogleLinkUrl(e.target.value)}
+                                    placeholder="https://docs.google.com/... or https://sheets.google.com/..."
+                                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500
+                                        ${isDarkMode 
+                                            ? 'bg-gray-700 border-gray-600 text-gray-100 placeholder-gray-400' 
+                                            : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                                        }
+                                    `}
+                                />
+                            </div>
+                        </div>
+                        
+                        <div className="flex justify-end gap-3 mt-6">
+                            <button
+                                onClick={() => {
+                                    setShowAddGoogleLinkModal(false);
+                                    setGoogleLinkTitle('');
+                                    setGoogleLinkUrl('');
+                                }}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors
+                                    ${isDarkMode 
+                                        ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' 
+                                        : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                    }
+                                `}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => handleAddGoogleLink(googleLinkTitle, googleLinkUrl)}
+                                disabled={!googleLinkTitle.trim() || !googleLinkUrl.trim()}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors
+                                    ${isDarkMode 
+                                        ? 'bg-blue-600 hover:bg-blue-700 text-white disabled:bg-gray-600 disabled:text-gray-400' 
+                                        : 'bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-300 disabled:text-gray-500'
+                                    }
+                                    disabled:cursor-not-allowed
+                                `}
+                            >
+                                Add Link
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

@@ -1,6 +1,6 @@
 [
   {
-    "origin": ["http://localhost:3000", "http://localhost:3009", "http://127.0.0.1:3000", "http://127.0.0.1:3009"],
+    "origin": ["http://localhost:3000", "http://localhost:3009", "http://localhost:61077", "http://127.0.0.1:3000", "http://127.0.0.1:3009", "http://127.0.0.1:61077"],
     "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
     "maxAgeSeconds": 3600
   }

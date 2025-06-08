@@ -1,0 +1,12 @@
+[debug] [2025-06-08T07:14:27.221Z] ----------------------------------------------------------------------
+[debug] [2025-06-08T07:14:27.222Z] Command:       /opt/homebrew/Cellar/node/23.10.0_1/bin/node /opt/homebrew/bin/firebase login --no-localhost
+[debug] [2025-06-08T07:14:27.222Z] CLI Version:   14.6.0
+[debug] [2025-06-08T07:14:27.222Z] Platform:      darwin
+[debug] [2025-06-08T07:14:27.222Z] Node Version:  v23.10.0
+[debug] [2025-06-08T07:14:27.223Z] Time:          Sun Jun 08 2025 00:14:27 GMT-0700 (Pacific Daylight Time)
+[debug] [2025-06-08T07:14:27.223Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-06-08T07:14:27.223Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[info] i  Firebase CLI integrates with Gemini in Firebase API to provide assistant features. Learn more about using Gemini in Firebase and how we train our models: https://firebase.google.com/docs/gemini-in-firebase/set-up-gemini#required-permissions 
+[debug] [2025-06-08T07:14:27.398Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2025-06-08T07:14:27.398Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
