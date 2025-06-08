@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
 // Main App component
 // Simple Rich Text Editor using contentEditable
@@ -521,6 +522,7 @@ const App = () => {
     const [llmLoading, setLlmLoading] = useState(false);
     const [llmQuestion, setLlmQuestion] = useState('');
     const [saveStatus, setSaveStatus] = useState('All changes saved'); // New state for save status
+    const [chatHistory, setChatHistory] = useState([]); // Store conversation history
 
     // New states for added features
     const [searchTerm, setSearchTerm] = useState(''); // State for document search query
@@ -531,6 +533,249 @@ const App = () => {
     const [rightPanelWidth, setRightPanelWidth] = useState(25); // Right panel width as percentage (default 25%)
     const [suggestedTags, setSuggestedTags] = useState([]); // AI-suggested tags
     const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false); // Loading state for tag suggestions
+
+    // Custom Icons and Cover Images states
+    const [currentDocumentIcon, setCurrentDocumentIcon] = useState('');
+    const [currentDocumentCoverImage, setCurrentDocumentCoverImage] = useState('');
+    const [showIconPicker, setShowIconPicker] = useState(false);
+    const [iconSearchTerm, setIconSearchTerm] = useState('');
+    const [activeIconCategory, setActiveIconCategory] = useState('Smileys');
+    const [isUploadingCover, setIsUploadingCover] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState('');
+
+    // Selected text Q&A states
+    const [selectedText, setSelectedText] = useState('');
+    const [showSelectedTextMenu, setShowSelectedTextMenu] = useState(false);
+    const [selectedTextPosition, setSelectedTextPosition] = useState({ x: 0, y: 0 });
+
+    // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
+    const handleTextSelection = useCallback(() => {
+        console.log("Text selection handler triggered");
+        
+        // Small delay to ensure selection is finalized
+        setTimeout(() => {
+            const selection = window.getSelection();
+            const selectedText = selection.toString().trim();
+            
+            console.log("Selected text:", selectedText, "Length:", selectedText.length);
+            
+            if (selectedText.length > 0 && selection.rangeCount > 0) {
+                // Check if selection is within the editor area
+                const editorElement = editorElementRef.current;
+                if (editorElement) {
+                    const range = selection.getRangeAt(0);
+                    const selectionContainer = range.commonAncestorContainer;
+                    
+                    // Check if selection is within our editor
+                    if (editorElement.contains(selectionContainer) || 
+                        (selectionContainer.nodeType === Node.TEXT_NODE && editorElement.contains(selectionContainer.parentNode))) {
+                        
+                        const rect = range.getBoundingClientRect();
+                        console.log("Selection position:", rect);
+                        
+                        // Ensure we have a valid rectangle
+                        if (rect.width > 0 && rect.height > 0) {
+                            setSelectedText(selectedText);
+                            setSelectedTextPosition({
+                                x: Math.max(50, rect.left + (rect.width / 2)), // Ensure minimum distance from edge
+                                y: Math.max(50, rect.top - 50) // Position above selection with minimum top margin
+                            });
+                            setShowSelectedTextMenu(true);
+                            console.log("Showing selected text menu at position:", {
+                                x: rect.left + (rect.width / 2),
+                                y: rect.top - 50
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            // Hide menu if no valid selection
+            if (showSelectedTextMenu) {
+                setShowSelectedTextMenu(false);
+                setSelectedText('');
+                console.log("Hiding selected text menu");
+            }
+        }, 10); // Small delay to ensure selection is complete
+    }, [showSelectedTextMenu]); // Dependencies for useCallback
+
+    // Emoji categories and data for icon picker
+    const emojiCategories = {
+        'Smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩'],
+        'Objects': ['📱', '💻', '⌨️', '🖥️', '🖨️', '📞', '📠', '📺', '📻', '🎵', '🎶', '📢', '📣', '📯', '🔔', '🔕'],
+        'Work': ['💼', '📊', '📈', '📉', '📋', '📌', '📍', '📎', '🖇️', '📏', '📐', '✂️', '📝', '✏️', '✒️', '🖊️'],
+        'Study': ['📚', '📖', '📓', '📔', '📒', '📕', '📗', '📘', '📙', '📰', '🗞️', '📜', '⭐', '🌟', '💡', '🔍'],
+        'Food': ['🍎', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅'],
+        'Travel': ['✈️', '🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🏍️'],
+        'Activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍'],
+        'Nature': ['🌱', '🌿', '🍀', '🍃', '🌸', '🌺', '🌻', '🌹', '🌷', '🌼', '🌵', '🌲', '🌳', '🌴', '☘️', '🍄'],
+        'Symbols': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖']
+    };
+
+    const emojiData = {
+        // Smileys
+        '😀': ['happy', 'smile', 'joy', 'grin'],
+        '😃': ['happy', 'smile', 'joy', 'grin'],
+        '😄': ['happy', 'smile', 'joy', 'laugh'],
+        '😁': ['happy', 'smile', 'joy', 'grin'],
+        '😆': ['happy', 'laugh', 'joy', 'funny'],
+        '😅': ['happy', 'laugh', 'sweat', 'relief'],
+        '🤣': ['laugh', 'funny', 'hilarious', 'joy'],
+        '😂': ['laugh', 'funny', 'cry', 'tears'],
+        '🙂': ['smile', 'happy', 'content'],
+        '🙃': ['silly', 'playful', 'upside'],
+        '😉': ['wink', 'flirt', 'playful'],
+        '😊': ['happy', 'smile', 'blush'],
+        '😇': ['angel', 'innocent', 'halo'],
+        '🥰': ['love', 'happy', 'hearts'],
+        '😍': ['love', 'heart', 'eyes'],
+        '🤩': ['star', 'excited', 'wow'],
+        
+        // Objects  
+        '📱': ['phone', 'mobile', 'device', 'technology'],
+        '💻': ['computer', 'laptop', 'technology', 'work'],
+        '⌨️': ['keyboard', 'typing', 'computer'],
+        '🖥️': ['computer', 'desktop', 'monitor'],
+        '🖨️': ['printer', 'print', 'document'],
+        '📞': ['phone', 'call', 'telephone'],
+        '📠': ['fax', 'machine', 'document'],
+        '📺': ['tv', 'television', 'screen'],
+        '📻': ['radio', 'music', 'sound'],
+        '🎵': ['music', 'note', 'sound'],
+        '🎶': ['music', 'notes', 'sound'],
+        '📢': ['megaphone', 'announcement'],
+        '📣': ['megaphone', 'cheer', 'loud'],
+        '📯': ['horn', 'sound', 'announcement'],
+        '🔔': ['bell', 'notification', 'alert'],
+        '🔕': ['bell', 'mute', 'silent'],
+        
+        // Work
+        '💼': ['briefcase', 'work', 'business'],
+        '📊': ['chart', 'graph', 'data', 'analytics'],
+        '📈': ['chart', 'growth', 'increase', 'up'],
+        '📉': ['chart', 'decrease', 'down', 'loss'],
+        '📋': ['clipboard', 'list', 'checklist'],
+        '📌': ['pin', 'important', 'mark'],
+        '📍': ['pin', 'location', 'place'],
+        '📎': ['paperclip', 'attach', 'clip'],
+        '🖇️': ['paperclip', 'attach', 'link'],
+        '📏': ['ruler', 'measure', 'length'],
+        '📐': ['triangle', 'ruler', 'measure'],
+        '✂️': ['scissors', 'cut', 'trim'],
+        '📝': ['memo', 'note', 'write', 'document'],
+        '✏️': ['pencil', 'write', 'edit'],
+        '✒️': ['pen', 'write', 'ink'],
+        '🖊️': ['pen', 'write', 'ballpoint'],
+        
+        // Study
+        '📚': ['books', 'study', 'learn', 'education'],
+        '📖': ['book', 'read', 'open', 'study'],
+        '📓': ['notebook', 'notes', 'study'],
+        '📔': ['notebook', 'notes', 'journal'],
+        '📒': ['ledger', 'notebook', 'record'],
+        '📕': ['book', 'closed', 'red'],
+        '📗': ['book', 'closed', 'green'],
+        '📘': ['book', 'closed', 'blue'],
+        '📙': ['book', 'closed', 'orange'],
+        '📰': ['newspaper', 'news', 'read'],
+        '🗞️': ['newspaper', 'news', 'rolled'],
+        '📜': ['scroll', 'document', 'ancient'],
+        '⭐': ['star', 'favorite', 'important'],
+        '🌟': ['star', 'sparkle', 'special'],
+        '💡': ['idea', 'lightbulb', 'bright', 'innovation'],
+        '🔍': ['search', 'magnify', 'find'],
+        
+        // Food
+        '🍎': ['apple', 'fruit', 'red', 'healthy'],
+        '🍊': ['orange', 'fruit', 'citrus'],
+        '🍋': ['lemon', 'fruit', 'citrus', 'sour'],
+        '🍌': ['banana', 'fruit', 'yellow'],
+        '🍉': ['watermelon', 'fruit', 'summer'],
+        '🍇': ['grapes', 'fruit', 'purple'],
+        '🍓': ['strawberry', 'fruit', 'red', 'berry'],
+        '🫐': ['blueberry', 'fruit', 'blue', 'berry'],
+        '🍈': ['melon', 'fruit', 'green'],
+        '🍒': ['cherry', 'fruit', 'red'],
+        '🍑': ['peach', 'fruit', 'orange'],
+        '🥭': ['mango', 'fruit', 'tropical'],
+        '🍍': ['pineapple', 'fruit', 'tropical'],
+        '🥥': ['coconut', 'fruit', 'tropical'],
+        '🥝': ['kiwi', 'fruit', 'green'],
+        '🍅': ['tomato', 'fruit', 'red'],
+        
+        // Travel
+        '✈️': ['airplane', 'travel', 'flight', 'vacation'],
+        '🚗': ['car', 'drive', 'vehicle'],
+        '🚕': ['taxi', 'car', 'yellow'],
+        '🚙': ['suv', 'car', 'vehicle'],
+        '🚌': ['bus', 'public', 'transport'],
+        '🚎': ['trolley', 'bus', 'electric'],
+        '🏎️': ['race', 'car', 'fast', 'speed'],
+        '🚓': ['police', 'car', 'law'],
+        '🚑': ['ambulance', 'medical', 'emergency'],
+        '🚒': ['fire', 'truck', 'emergency'],
+        '🚐': ['van', 'vehicle', 'minibus'],
+        '🛻': ['truck', 'pickup', 'vehicle'],
+        '🚚': ['truck', 'delivery', 'lorry'],
+        '🚛': ['truck', 'semi', 'articulated'],
+        '🚜': ['tractor', 'farm', 'agriculture'],
+        '🏍️': ['motorcycle', 'bike', 'motorbike'],
+        
+        // Activities
+        '⚽': ['soccer', 'football', 'sport', 'ball'],
+        '🏀': ['basketball', 'sport', 'ball'],
+        '🏈': ['football', 'american', 'sport'],
+        '⚾': ['baseball', 'sport', 'ball'],
+        '🥎': ['softball', 'sport', 'ball'],
+        '🎾': ['tennis', 'sport', 'ball'],
+        '🏐': ['volleyball', 'sport', 'ball'],
+        '🏉': ['rugby', 'sport', 'ball'],
+        '🥏': ['frisbee', 'disc', 'throw'],
+        '🎱': ['billiards', 'pool', 'eight'],
+        '🪀': ['yoyo', 'toy', 'string'],
+        '🏓': ['ping', 'pong', 'table', 'tennis'],
+        '🏸': ['badminton', 'sport', 'shuttlecock'],
+        '🏒': ['hockey', 'ice', 'stick'],
+        '🏑': ['hockey', 'field', 'stick'],
+        '🥍': ['lacrosse', 'sport', 'stick'],
+        
+        // Nature
+        '🌱': ['plant', 'growth', 'seedling', 'green'],
+        '🌿': ['herb', 'leaf', 'green', 'nature'],
+        '🍀': ['clover', 'luck', 'four', 'leaf'],
+        '🍃': ['leaves', 'nature', 'wind', 'green'],
+        '🌸': ['flower', 'blossom', 'pink', 'spring'],
+        '🌺': ['flower', 'hibiscus', 'tropical'],
+        '🌻': ['sunflower', 'yellow', 'sun'],
+        '🌹': ['rose', 'flower', 'red', 'love'],
+        '🌷': ['tulip', 'flower', 'spring'],
+        '🌼': ['daisy', 'flower', 'white'],
+        '🌵': ['cactus', 'desert', 'plant'],
+        '🌲': ['tree', 'evergreen', 'pine'],
+        '🌳': ['tree', 'deciduous', 'green'],
+        '🌴': ['palm', 'tree', 'tropical'],
+        '☘️': ['shamrock', 'luck', 'irish'],
+        '🍄': ['mushroom', 'fungi', 'toadstool'],
+        
+        // Symbols
+        '❤️': ['heart', 'love', 'red'],
+        '🧡': ['heart', 'orange', 'love'],
+        '💛': ['heart', 'yellow', 'love'],
+        '💚': ['heart', 'green', 'love'],
+        '💙': ['heart', 'blue', 'love'],
+        '💜': ['heart', 'purple', 'love'],
+        '🖤': ['heart', 'black', 'love'],
+        '🤍': ['heart', 'white', 'love'],
+        '🤎': ['heart', 'brown', 'love'],
+        '💔': ['broken', 'heart', 'sad'],
+        '❣️': ['heart', 'exclamation', 'love'],
+        '💕': ['hearts', 'love', 'pink'],
+        '💞': ['hearts', 'revolving', 'love'],
+        '💓': ['beating', 'heart', 'love'],
+        '💗': ['growing', 'heart', 'love'],
+        '💖': ['sparkling', 'heart', 'love']
+    };
 
     // Ref for the LLM response scroll
     const llmResponseRef = useRef(null);
@@ -643,7 +888,7 @@ const App = () => {
                 apiKey: "AIzaSyB03xYU6iyg-y8JjQdJHxv4qwQc3_20x0E",
                 authDomain: "notes-app-33f99.firebaseapp.com",
                 projectId: "notes-app-33f99",
-                storageBucket: "notes-app-33f99.firebasestorage.app",
+                storageBucket: "notes-app-33f99.appspot.com", // Changed to .appspot.com for better CORS support
                 messagingSenderId: "48692428369",
                 appId: "1:48692428369:web:5f9abeab4bb8e1fc1c8270",
             };
@@ -652,8 +897,11 @@ const App = () => {
             const app = initializeApp(firebaseConfig);
             const firestore = getFirestore(app);
             const firebaseAuth = getAuth(app);
+            const storage = getStorage(app);
 
             setDb(firestore);
+            window.firebaseStorage = storage; // Make storage available globally
+            console.log('Firebase Storage initialized:', !!storage);
 
             const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
                 if (user) {
@@ -673,10 +921,12 @@ const App = () => {
                         if (!localUserId) {
                             localUserId = 'local-user-' + Math.random().toString(36).substr(2, 9);
                             localStorage.setItem('local-user-id', localUserId);
+                            console.log("Firebase: Created new persistent local user ID:", localUserId);
+                        } else {
+                            console.log("Firebase: Retrieved existing local user ID:", localUserId);
                         }
                         setUserId(localUserId);
                         setIsAuthReady(true);
-                        console.log("Firebase: Using local user ID:", localUserId);
                     }
                 }
             });
@@ -697,7 +947,7 @@ const App = () => {
         const documentsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
         console.log("Firestore: Attempting to subscribe to documents at path:", `artifacts/${appId}/users/${userId}/notes`);
 
-        const unsubscribe = onSnapshot(documentsCollectionRef, (snapshot) => {
+        const unsubscribe = onSnapshot(documentsCollectionRef, async (snapshot) => {
             const fetchedDocuments = snapshot.docs.map(doc => ({
                 id: doc.id,
                 ...doc.data(),
@@ -705,6 +955,35 @@ const App = () => {
             }));
             fetchedDocuments.sort((a, b) => (a.title || 'Untitled').localeCompare(b.title || 'Untitled'));
             setDocuments(fetchedDocuments);
+
+            // Auto-create first document if none exist
+            if (fetchedDocuments.length === 0) {
+                console.log("No documents found, creating first document automatically...");
+                try {
+                    const newDocId = crypto.randomUUID();
+                    const newDocData = {
+                        id: newDocId,
+                        title: '',
+                        content: '',
+                        tags: [],
+                        parentId: null,
+                        order: Date.now(),
+                        icon: '',
+                        coverImage: '',
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    };
+                    
+                    const newDocRef = doc(collection(db, `artifacts/${appId}/users/${userId}/notes`), newDocId);
+                    await setDoc(newDocRef, newDocData);
+                    
+                    setCurrentDocumentId(newDocId);
+                    console.log("First document created successfully with ID:", newDocId);
+                } catch (error) {
+                    console.error("Error creating first document:", error);
+                }
+                return;
+            }
 
             if (!currentDocumentId && fetchedDocuments.length > 0) {
                 setCurrentDocumentId(fetchedDocuments[0].id);
@@ -748,10 +1027,14 @@ const App = () => {
                     setCurrentDocumentContent(data.content || '');
                     setCurrentDocumentTitle(data.title || 'Untitled');
                     setCurrentDocumentTags(data.tags || []);
+                    setCurrentDocumentIcon(data.icon || '');
+                    setCurrentDocumentCoverImage(data.coverImage || '');
                 } else {
                     setCurrentDocumentContent('');
                     setCurrentDocumentTitle('Untitled');
                     setCurrentDocumentTags([]);
+                    setCurrentDocumentIcon('');
+                    setCurrentDocumentCoverImage('');
                 }
             } catch (error) {
                 console.error("Error fetching document content:", error);
@@ -773,7 +1056,9 @@ const App = () => {
                     // Parse existing content
                     let initialData = { blocks: [] };
                     if (currentDocumentContent) {
+                        console.log('Converting content for editor:', currentDocumentContent.substring(0, 100) + '...');
                         initialData = convertToEditorFormat(currentDocumentContent);
+                        console.log('Converted to editor format:', initialData);
                     }
 
                     // Create Editor.js instance with basic tools first
@@ -819,6 +1104,13 @@ const App = () => {
 
                     // Save editor reference
                     editorRef.current = editor;
+
+                    // Add text selection listeners for contextual Q&A
+                    // Attach to document to catch all text selections
+                    document.addEventListener('mouseup', handleTextSelection);
+                    document.addEventListener('keyup', handleTextSelection);
+                    console.log("Text selection listeners attached to document");
+                    console.log("handleTextSelection function:", handleTextSelection);
 
                     console.log("Editor.js initialized successfully");
                 } catch (error) {
@@ -900,8 +1192,12 @@ const App = () => {
                 editorRef.current.destroy();
                 editorRef.current = null;
             }
+            // Remove text selection listeners
+            document.removeEventListener('mouseup', handleTextSelection);
+            document.removeEventListener('keyup', handleTextSelection);
+            console.log("Text selection listeners removed");
         };
-    }, [isAuthReady]); // Remove currentDocumentContent dependency to prevent recreation
+            }, [isAuthReady, handleTextSelection]); // Add handleTextSelection dependency
 
     // Separate useEffect to update editor content when document changes
     useEffect(() => {
@@ -925,9 +1221,11 @@ const App = () => {
             // Update Editor.js content when document changes
             if (editorRef.current) {
                 try {
+                    console.log('Updating editor with content:', currentDocumentContent?.substring(0, 100) + '...');
                     const newData = convertToEditorFormat(currentDocumentContent || '');
+                    console.log('Converted data for editor:', newData);
                     await editorRef.current.render(newData);
-                    console.log("Editor.js content updated for document:", currentDocumentId);
+                    console.log("Editor.js content updated successfully for document:", currentDocumentId);
                 } catch (error) {
                     console.error("Failed to update Editor.js content:", error);
                 }
@@ -1079,6 +1377,157 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
         }
     };
 
+    // Icon picker functionality
+    const getFilteredEmojis = () => {
+        let emojis = activeIconCategory === 'All' 
+            ? Object.values(emojiCategories).flat()
+            : emojiCategories[activeIconCategory] || [];
+        
+        if (iconSearchTerm && iconSearchTerm.trim()) {
+            const searchLower = iconSearchTerm.toLowerCase().trim();
+            
+            emojis = emojis.filter(emoji => {
+                const keywords = emojiData[emoji] || [];
+                
+                // Check if any keyword contains the search term
+                const hasKeywordMatch = keywords.some(keyword => 
+                    keyword.toLowerCase().includes(searchLower)
+                );
+                
+                // Also check if the emoji itself matches (for direct emoji searches)
+                const hasEmojiMatch = emoji.includes(searchLower);
+                
+                return hasKeywordMatch || hasEmojiMatch;
+            });
+        }
+        
+        return emojis;
+    };
+
+    const updateDocumentIcon = async (newIcon) => {
+        if (!currentDocumentId || !db || !userId || !appId) return;
+        
+        try {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${currentDocumentId}`);
+            await updateDoc(docRef, { icon: newIcon });
+            setCurrentDocumentIcon(newIcon);
+            setShowIconPicker(false);
+        } catch (error) {
+            console.error('Error updating document icon:', error);
+        }
+    };
+
+    
+
+    const compressImage = (file, maxWidth = 1200, quality = 0.8) => {
+        return new Promise((resolve) => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            
+            img.onload = () => {
+                // Calculate new dimensions
+                let { width, height } = img;
+                if (width > maxWidth) {
+                    height = (height * maxWidth) / width;
+                    width = maxWidth;
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                
+                // Draw and compress
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob(resolve, 'image/jpeg', quality);
+            };
+            
+            img.src = URL.createObjectURL(file);
+        });
+    };
+
+    const uploadCoverImage = async (file) => {
+        console.log('Starting upload process...');
+        console.log('Current state:', { currentDocumentId, userId, appId, hasStorage: !!window.firebaseStorage });
+        
+        if (!currentDocumentId || !userId || !appId) {
+            alert('Unable to upload: missing document or user information.');
+            return;
+        }
+        
+        // Validate file size (max 5MB for better performance)
+        if (file.size > 5 * 1024 * 1024) {
+            alert('Image file is too large. Please choose a file smaller than 5MB.');
+            return;
+        }
+        
+        setIsUploadingCover(true);
+        setUploadProgress('Preparing image...');
+        
+        try {
+            console.log('Original file:', file.name, Math.round(file.size / 1024), 'KB');
+            
+            // Compress image before processing
+            setUploadProgress('Compressing image...');
+            const compressedFile = await compressImage(file, 800, 0.7); // Smaller max width and lower quality for faster upload
+            console.log('Compressed file size:', Math.round(compressedFile.size / 1024), 'KB');
+            
+            // Convert to base64 data URL as fallback (works without Firebase Storage)
+            setUploadProgress('Processing image...');
+            const reader = new FileReader();
+            const dataUrlPromise = new Promise((resolve, reject) => {
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(compressedFile);
+            });
+            
+            const dataUrl = await dataUrlPromise;
+            console.log('Image converted to data URL, length:', dataUrl.length);
+            
+            // Save directly to Firestore as data URL (temporary solution)
+            setUploadProgress('Saving image...');
+            console.log('Saving image data to Firestore...');
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${currentDocumentId}`);
+            await updateDoc(docRef, { coverImage: dataUrl });
+            
+            setCurrentDocumentCoverImage(dataUrl);
+            setUploadProgress('');
+            console.log('Cover image saved successfully');
+            
+        } catch (error) {
+            console.error('Detailed error uploading cover image:', error);
+            
+            let errorMessage = 'Failed to upload cover image. ';
+            if (error.message.includes('quota') || error.message.includes('size')) {
+                errorMessage += 'Image is too large. Please try a smaller image.';
+            } else {
+                errorMessage += `Error: ${error.message}`;
+            }
+            
+            alert(errorMessage);
+            setUploadProgress('');
+        } finally {
+            setIsUploadingCover(false);
+        }
+    };
+
+    const removeCoverImage = async () => {
+        if (!currentDocumentId || !userId || !appId) return;
+        
+        try {
+            // Update Firestore document to remove cover image
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${currentDocumentId}`);
+            await updateDoc(docRef, { coverImage: '' });
+            
+            setCurrentDocumentCoverImage('');
+            console.log('Cover image removed successfully');
+        } catch (error) {
+            console.error('Error removing cover image:', error);
+            alert('Failed to remove cover image. Please try again.');
+        }
+    };
+
+
+
     // Build hierarchical tree structure from flat documents array
     const buildDocumentTree = (docs) => {
         const tree = [];
@@ -1125,7 +1574,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
         setDocumentTree(tree);
     }, [documents]);
 
-    const handleAddDocument = async (template = { name: 'Blank Page', title: 'Untitled', content: '' }, parentId = null) => {
+    const handleAddDocument = async (template = { name: 'Blank Page', title: '', content: '' }, parentId = null) => {
         if (!db || !userId || !appId) {
             console.error("Firestore: Database, user, or appId not ready to add document.");
             return;
@@ -1139,6 +1588,8 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
             tags: [],
             parentId: parentId,
             order: Date.now(), // Use timestamp for initial ordering
+            icon: '',
+            coverImage: '',
             createdAt: new Date(),
             updatedAt: new Date()
         };
@@ -1189,9 +1640,12 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
         // If it's already Editor.js format, return as is
         try {
             const parsed = JSON.parse(content);
-            if (parsed.blocks) return parsed;
+            if (parsed.blocks) {
+                console.log('Content is already in Editor.js format, returning as-is');
+                return parsed;
+            }
         } catch (e) {
-            // Not JSON, continue with conversion
+            console.log('Content is not JSON, converting from HTML/text');
         }
 
         const blocks = [];
@@ -1270,67 +1724,97 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
         }).filter(text => text.trim()).join('\n\n');
     };
 
-    const askLlm = async () => {
-        if (!llmQuestion.trim()) {
+    const askLlm = async (customQuestion = null, contextText = null) => {
+        // Ensure question is a string
+        const question = typeof customQuestion === 'string' ? customQuestion : llmQuestion;
+        
+        if (!question || typeof question !== 'string' || !question.trim()) {
             setLlmResponse("Please enter a question.");
-            return;
-        }
-        if (documents.length === 0) {
-            setLlmResponse("There are no documents to ask questions about. Please create some pages first.");
             return;
         }
 
         setLlmLoading(true);
-        setLlmResponse('');
-
-        let allDocumentsPlainTextContent = "";
-        documents.forEach(doc => {
-            // Handle both Editor.js (JSON) and HTML content for AI assistant
-            let plainContent = '';
-            if (doc.content) {
-                try {
-                    // Try to parse as Editor.js format first
-                    const parsed = JSON.parse(doc.content);
-                    if (parsed.blocks) {
-                        plainContent = convertEditorToPlainText(parsed);
-                    } else {
-                        // Fallback to HTML conversion
-                        plainContent = convertHtmlToPlainText(doc.content);
-                    }
-                } catch (e) {
-                    // Not JSON, treat as HTML/plain text
-                    plainContent = convertHtmlToPlainText(doc.content);
-                }
-            }
-            
-            allDocumentsPlainTextContent += `--- Document: ${doc.title || 'Untitled'} (ID: ${doc.id}) ---\n`;
-            allDocumentsPlainTextContent += `${plainContent || "No content."}\n`;
-            if (doc.tags && doc.tags.length > 0) {
-                allDocumentsPlainTextContent += `Tags: ${doc.tags.join(', ')}\n`;
-            }
-            allDocumentsPlainTextContent += `\n`;
-        });
-
-        let chatHistory = [];
-        const prompt = `Based on the following collection of documents, answer the question below.
         
-        --- All Documents Content (Plain Text) ---
-        ${allDocumentsPlainTextContent}
-        --- End All Documents Content ---
+        // Add user question to chat history
+        const userMessage = { role: "user", parts: [{ text: question }] };
+        const newChatHistory = [...chatHistory, userMessage];
+        setChatHistory(newChatHistory);
         
-        Question: ${llmQuestion}`;
+        // Clear the input field
+        setLlmQuestion('');
 
-        chatHistory.push({ role: "user", parts: [{ text: prompt }] });
-
-        const payload = { contents: chatHistory };
         const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
-        
         if (!apiKey) {
-            setLlmResponse("AI Assistant is not configured. Please add REACT_APP_GEMINI_API_KEY to your .env file.");
+            const errorMsg = "API key not found. Please set REACT_APP_GEMINI_API_KEY in your environment.";
+            setLlmResponse(errorMsg);
+            // Add error to chat history
+            setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
             setLlmLoading(false);
             return;
         }
-        
+
+        let conversationContext = "";
+        let payload;
+
+        // If we have context text (selected text), handle it specially
+        if (contextText) {
+            // For selected text queries, start fresh conversation with context
+            conversationContext = `Based on the following selected text, answer this question: "${question}"
+
+Selected text:
+"${contextText}"
+
+Please provide a clear, helpful answer based specifically on the selected content.`;
+
+            payload = {
+                contents: [{ role: "user", parts: [{ text: conversationContext }] }]
+            };
+        } else {
+            // Original document-based query with conversation history
+            if (documents.length === 0) {
+                const errorMsg = "There are no documents to ask questions about. Please create some pages first.";
+                setLlmResponse(errorMsg);
+                setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
+                setLlmLoading(false);
+                return;
+            }
+
+            // Build context from documents (only if this is the first message in conversation)
+            if (newChatHistory.length === 1) {
+                // First message - include document context
+                const documentsText = documents.map(doc => {
+                    let content = '';
+                    if (doc.content) {
+                        try {
+                            const parsed = JSON.parse(doc.content);
+                            if (parsed.blocks) {
+                                content = convertEditorToPlainText(parsed);
+                            } else {
+                                content = convertHtmlToPlainText(doc.content);
+                            }
+                        } catch (e) {
+                            content = convertHtmlToPlainText(doc.content);
+                        }
+                    }
+                    return `Document: ${doc.title || 'Untitled'}\nContent: ${content}\nTags: ${(doc.tags || []).join(', ')}`;
+                }).join('\n\n---\n\n');
+
+                const contextualQuestion = `Based on my notes/documents below, ${question}
+
+My Documents:
+${documentsText}`;
+
+                // Include recent chat history (last 8 messages to manage token usage)
+                const recentHistory = newChatHistory.slice(-1);
+                recentHistory[0] = { role: "user", parts: [{ text: contextualQuestion }] };
+                payload = { contents: recentHistory };
+            } else {
+                // Continuing conversation - use recent history without re-adding document context
+                const recentHistory = newChatHistory.slice(-8); // Last 8 messages
+                payload = { contents: recentHistory };
+            }
+        }
+
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
         try {
@@ -1344,18 +1828,26 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
             if (result.candidates && result.candidates.length > 0 &&
                 result.candidates[0].content && result.candidates[0].content.parts &&
                 result.candidates[0].content.parts.length > 0) {
-                const text = result.candidates[0].content.parts[0].text;
-                setLlmResponse(text);
+                
+                const aiResponse = result.candidates[0].content.parts[0].text;
+                setLlmResponse(aiResponse);
+                
+                // Add AI response to chat history
+                const aiMessage = { role: "model", parts: [{ text: aiResponse }] };
+                setChatHistory([...newChatHistory, aiMessage]);
+                
             } else {
-                setLlmResponse("Sorry, I couldn't get a response from the LLM. Please try again. (No candidates found)");
-                console.error("LLM API: Unexpected response structure:", result);
+                const errorMsg = "I couldn't generate a response. Please try again.";
+                setLlmResponse(errorMsg);
+                setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
             }
         } catch (error) {
-            setLlmResponse("An error occurred while connecting to the LLM. Please check your network connection.");
-            console.error("LLM API Fetch Error:", error);
+            console.error("Error calling Gemini API:", error);
+            const errorMsg = "Error: Unable to get AI response. Please check your connection and API key.";
+            setLlmResponse(errorMsg);
+            setChatHistory([...newChatHistory, { role: "model", parts: [{ text: errorMsg }] }]);
         } finally {
             setLlmLoading(false);
-            setLlmQuestion('');
         }
     };
 
@@ -1366,7 +1858,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
     };
 
     const templates = [
-        { name: 'Blank Page', title: 'Untitled', content: '' },
+        { name: 'Blank Page', title: '', content: '' },
         { 
             name: 'Meeting Notes', 
             title: 'Meeting Notes', 
@@ -1524,10 +2016,10 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                         }}
                     >
                         <span className="mr-2 text-sm">
-                            {hasChildren ? '📁' : '📄'}
+                            {hasChildren ? '📁' : node.icon}
                         </span>
                         <span className="truncate">
-                            {node.title || 'Untitled'}
+                            {node.title || 'New page'}
                         </span>
                     </div>
                     
@@ -1810,12 +2302,15 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
             if (templateMenuRef.current && !templateMenuRef.current.contains(event.target)) {
                 setShowTemplateMenu(false);
             }
+            if (showSelectedTextMenu && !event.target.closest('.ask-ai-menu')) {
+                setShowSelectedTextMenu(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, []);
+    }, [showSelectedTextMenu]);
 
     if (!isAuthReady) {
         return (
@@ -1939,7 +2434,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                                 key={node.id} 
                                 node={node} 
                                 level={0} 
-                                onAddChild={(parentId) => handleAddDocument({ name: 'Blank Page', title: 'Untitled', content: '' }, parentId)}
+                                onAddChild={(parentId) => handleAddDocument({ name: 'Blank Page', title: '', content: '' }, parentId)}
                             />
                         ));
                     })()}
@@ -1987,7 +2482,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                                             onClick={() => index < breadcrumbPath.length - 1 ? handleDocumentSelect(doc.id) : null}
                                             className={`hover:underline ${index === breadcrumbPath.length - 1 ? 'font-medium' : 'cursor-pointer'}`}
                                         >
-                                            {doc.title || 'Untitled'}
+                                            {doc.title || 'New page'}
                                         </button>
                                     </div>
                                 ))}
@@ -1995,14 +2490,222 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                         );
                     })()}
                     
-                    <input
-                        type="text"
-                        className={`w-full text-4xl font-extrabold mb-6 p-2 bg-transparent border-none focus:outline-none
-                            ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
-                        value={currentDocumentTitle}
-                        onChange={(e) => setCurrentDocumentTitle(e.target.value)}
-                        placeholder="Untitled"
-                    />
+                    {/* Cover Image */}
+                    {currentDocumentId && currentDocumentCoverImage && (
+                        <div className="group relative mb-6 rounded-lg overflow-hidden">
+                            <img 
+                                src={currentDocumentCoverImage} 
+                                alt="Document cover"
+                                className="w-full h-48 object-cover"
+                            />
+                            {/* Cover Image Controls */}
+                            <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-30 transition-all duration-200 rounded-lg">
+                                <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex gap-2">
+                                    <button
+                                        onClick={() => {
+                                            const fileInput = document.createElement('input');
+                                            fileInput.type = 'file';
+                                            fileInput.accept = 'image/*';
+                                            fileInput.onchange = (e) => {
+                                                if (e.target.files[0]) {
+                                                    uploadCoverImage(e.target.files[0]);
+                                                }
+                                            };
+                                            fileInput.click();
+                                        }}
+                                        className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors
+                                            ${isDarkMode ? 'bg-gray-800 hover:bg-gray-700 text-white' : 'bg-white hover:bg-gray-100 text-gray-700'}
+                                        `}
+                                        disabled={isUploadingCover}
+                                    >
+                                        {isUploadingCover ? (uploadProgress || 'Uploading...') : 'Change cover'}
+                                    </button>
+                                    <button
+                                        onClick={removeCoverImage}
+                                        className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors
+                                            ${isDarkMode ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}
+                                        `}
+                                    >
+                                        Remove
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Title with Icon and Toolbar */}
+                    {currentDocumentId && (
+                        <div className="group relative mb-6">
+                            {/* Notion-like Hover Toolbar */}
+                            <div className={`absolute -top-12 left-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-200 z-50 
+                                px-3 py-2 rounded-lg shadow-lg border
+                                ${isDarkMode ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}
+                            `}>
+                                <button
+                                    onClick={() => setShowIconPicker(!showIconPicker)}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors font-medium
+                                        ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-600'}
+                                    `}
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                                        <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                                        <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                                    </svg>
+                                    Add icon
+                                </button>
+                                
+                                <button 
+                                    onClick={() => {
+                                        const fileInput = document.createElement('input');
+                                        fileInput.type = 'file';
+                                        fileInput.accept = 'image/*';
+                                        fileInput.onchange = (e) => {
+                                            if (e.target.files[0]) {
+                                                uploadCoverImage(e.target.files[0]);
+                                            }
+                                        };
+                                        fileInput.click();
+                                    }}
+                                    disabled={isUploadingCover}
+                                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors font-medium
+                                        ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-600'}
+                                        ${isUploadingCover ? 'opacity-50 cursor-not-allowed' : ''}
+                                    `}>
+                                    {isUploadingCover ? (
+                                        <div className="animate-spin rounded-full h-4 w-4 border-t border-current"></div>
+                                    ) : (
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
+                                            <polyline points="16,6 12,2 8,6"></polyline>
+                                            <line x1="12" y1="2" x2="12" y2="15"></line>
+                                        </svg>
+                                    )}
+                                    {isUploadingCover ? (uploadProgress || 'Uploading...') : 'Add cover'}
+                                </button>
+                            </div>
+                            
+                            {/* Document Icon and Title */}
+                            <div className="flex items-start gap-3">
+                                <button
+                                    onClick={() => setShowIconPicker(!showIconPicker)}
+                                    className={`text-4xl hover:bg-gray-100 rounded-lg p-1 transition-colors duration-200 cursor-pointer
+                                        ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}
+                                    `}
+                                    title="Change icon"
+                                >
+                                    {currentDocumentIcon}
+                                </button>
+                                
+                                <input
+                                    type="text"
+                                    className={`flex-1 text-4xl font-extrabold p-2 bg-transparent border-none focus:outline-none
+                                        ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
+                                    value={currentDocumentTitle}
+                                    onChange={(e) => setCurrentDocumentTitle(e.target.value)}
+                                    placeholder="New page"
+                                />
+                            </div>
+                            
+                            {/* Icon Picker */}
+                            {showIconPicker && (
+                                <div className={`absolute top-16 left-0 mt-2 rounded-lg shadow-xl border z-50 overflow-hidden
+                                    ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}
+                                `} style={{ width: '320px', maxHeight: '400px' }}>
+                                    {/* Header */}
+                                    <div className={`flex items-center justify-between p-3 border-b ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                                        <h3 className={`text-sm font-medium ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>Icon</h3>
+                                        <button 
+                                            onClick={() => setShowIconPicker(false)}
+                                            className={`p-1 rounded-md hover:bg-opacity-80 transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}
+                                        >
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                <line x1="6" y1="6" x2="18" y2="18"></line>
+                                            </svg>
+                                        </button>
+                                    </div>
+                                    
+                                    {/* Search */}
+                                    <div className={`p-3 border-b ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                                        <div className="relative">
+                                            <svg className={`absolute left-2.5 top-1/2 transform -translate-y-1/2 w-4 h-4 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                            </svg>
+                                            <input
+                                                type="text"
+                                                placeholder="Filter..."
+                                                value={iconSearchTerm}
+                                                onChange={(e) => setIconSearchTerm(e.target.value)}
+                                                className={`w-full pl-8 pr-3 py-2 text-sm rounded-md border transition-colors
+                                                    ${isDarkMode 
+                                                        ? 'bg-gray-700 border-gray-600 text-gray-200 placeholder-gray-400 focus:border-blue-500' 
+                                                        : 'bg-gray-50 border-gray-300 text-gray-800 placeholder-gray-500 focus:border-blue-500'
+                                                    } focus:outline-none focus:ring-1 focus:ring-blue-500`}
+                                            />
+                                        </div>
+                                    </div>
+                                    
+                                    {/* Categories */}
+                                    <div className={`flex overflow-x-auto p-2 border-b ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                                        {Object.keys(emojiCategories).map(category => (
+                                            <button
+                                                key={category}
+                                                onClick={() => setActiveIconCategory(category)}
+                                                className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap mr-1 transition-colors
+                                                    ${activeIconCategory === category 
+                                                        ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
+                                                        : (isDarkMode ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100')
+                                                    }`}
+                                            >
+                                                {category}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    
+                                    {/* Icon Grid */}
+                                    <div className="p-3 max-h-64 overflow-y-auto">
+                                        <div className="grid grid-cols-8 gap-1">
+                                            {getFilteredEmojis().map((emoji, index) => (
+                                                <button 
+                                                    key={index}
+                                                    onClick={() => updateDocumentIcon(emoji)}
+                                                    className={`text-lg p-2 rounded-md transition-all duration-150 hover:scale-110
+                                                        ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}
+                                                        ${currentDocumentIcon === emoji ? (isDarkMode ? 'bg-gray-700 ring-2 ring-blue-500' : 'bg-gray-100 ring-2 ring-blue-500') : ''}
+                                                    `}
+                                                    title={`${emoji} - ${emojiData[emoji] ? emojiData[emoji].join(', ') : ''}`}
+                                                >
+                                                    {emoji}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {getFilteredEmojis().length === 0 && iconSearchTerm && (
+                                            <div className={`text-center py-8 text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                No emojis found for "{iconSearchTerm}"
+                                            </div>
+                                        )}
+                                    </div>
+                                    
+                                    {/* Footer */}
+                                    <div className={`p-3 border-t ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                                        <button 
+                                            onClick={() => updateDocumentIcon('')}
+                                            className={`w-full py-2 px-3 text-sm font-medium rounded-md transition-colors
+                                                ${isDarkMode 
+                                                    ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700' 
+                                                    : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
+                                                }`}
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {currentDocumentId && (
                         <>
                             {/* Tags input/display */}
@@ -2096,9 +2799,46 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                     {/* Editor.js Integration with Fallback */}
                     <div
                         ref={editorElementRef}
-                        className={`flex-grow w-full text-lg leading-relaxed mb-4
+                        className={`flex-grow w-full text-lg leading-relaxed mb-4 relative
                             ${isDarkMode ? 'editor-dark' : 'editor-light'}`}
                     ></div>
+
+                    {/* Floating Ask AI Button for Selected Text */}
+                    {showSelectedTextMenu && (
+                        <div 
+                            className="ask-ai-menu fixed z-50 bg-blue-500 text-white px-3 py-2 rounded-lg shadow-lg cursor-pointer hover:bg-blue-600 transition-colors duration-200 flex items-center gap-2"
+                            style={{
+                                left: selectedTextPosition.x - 50,
+                                top: selectedTextPosition.y - 50
+                            }}
+                            onClick={() => {
+                                const question = prompt('What would you like to know about the selected text?');
+                                if (question && question.trim()) {
+                                    askLlm(question, selectedText);
+                                    setShowSelectedTextMenu(false);
+                                }
+                            }}
+                        >
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            <span className="text-sm font-medium">Ask AI</span>
+                        </div>
+                    )}
+
+                    {/* Debug button - temporary */}
+                    <button 
+                        onClick={() => {
+                            console.log("Manual test triggered");
+                            console.log("showSelectedTextMenu:", showSelectedTextMenu);
+                            console.log("selectedText:", selectedText);
+                            console.log("editorElementRef.current:", editorElementRef.current);
+                            handleTextSelection();
+                        }}
+                        className="mt-2 px-3 py-1 bg-red-500 text-white text-xs rounded"
+                    >
+                        Test Selection (Debug)
+                    </button>
 
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
@@ -2143,10 +2883,49 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                 <button onClick={() => setShowLlmMobile(false)} className={`md:hidden absolute top-4 left-4 p-2 rounded-full ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-200'}`}>
                     <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
-                <div className={`text-lg font-semibold mb-6 ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>AI Assistant</div>
+                <div className="flex items-center justify-between mb-6">
+                    <div className={`text-lg font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-700'}`}>AI Assistant</div>
+                    {chatHistory.length > 0 && (
+                        <button
+                            onClick={() => {
+                                setChatHistory([]);
+                                setLlmResponse('');
+                            }}
+                            className={`px-2 py-1 text-xs rounded-md transition-colors duration-200
+                                ${isDarkMode ? 'bg-gray-600 text-gray-300 hover:bg-gray-500' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'}
+                            `}
+                            title="Clear chat history"
+                        >
+                            Clear Chat
+                        </button>
+                    )}
+                </div>
                 <div ref={llmResponseRef} className={`flex-grow overflow-y-auto p-3 rounded-md mb-4 custom-scrollbar text-sm leading-relaxed
                     ${isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-800'}`}>
-                    {llmResponse ? llmResponse : "Ask a question about your documents here. For example: 'Summarize all my notes.'"}
+                    {chatHistory.length === 0 ? (
+                        <div className={`text-center py-8 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                            Ask a question about your documents here. For example: 'Summarize all my notes.'
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {chatHistory.map((message, index) => (
+                                <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                                        message.role === 'user' 
+                                            ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
+                                            : (isDarkMode ? 'bg-gray-600 text-gray-100' : 'bg-gray-200 text-gray-800')
+                                    }`}>
+                                        <div className={`text-xs mb-1 opacity-75 ${
+                                            message.role === 'user' ? 'text-right' : 'text-left'
+                                        }`}>
+                                            {message.role === 'user' ? 'You' : 'AI Assistant'}
+                                        </div>
+                                        <div className="whitespace-pre-wrap">{message.parts[0].text}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                     {llmLoading && (
                         <div className="flex items-center justify-center mt-4">
                             <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
@@ -2169,7 +2948,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                     disabled={llmLoading || documents.length === 0}
                 />
                 <button
-                    onClick={askLlm}
+                    onClick={() => askLlm()}
                     className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
                         disabled:opacity-50 disabled:cursor-not-allowed`}
                     disabled={llmLoading || documents.length === 0}
