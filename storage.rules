@@ -1,0 +1,28 @@
+rules_version = '2';
+
+// Craft rules based on data in your Firestore database
+// allow write: if firestore.get(
+//    /databases/$(default)/documents/users/$(request.auth.uid)).data.isAdmin;
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Allow all users (including anonymous) to read and write files
+    match /{allPaths=**} {
+      allow read, write: if true;
+    }
+    
+    // Specific rule for user uploads
+    match /user_uploads/{userId}/{allPaths=**} {
+      allow read, write: if true;
+    }
+    
+    // Specific rule for uploaded documents
+    match /user_uploads/{userId}/uploaded_docs/{fileName} {
+      allow read, write: if true;
+    }
+    
+    // Allow cover images
+    match /cover_images/{allPaths=**} {
+      allow read, write: if true;
+    }
+  }
+} 

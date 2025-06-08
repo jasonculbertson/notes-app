@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
 
 // Main App component
@@ -1354,13 +1354,27 @@ const App = () => {
         console.log("Firestore: Subscribing to uploaded files at path:", `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
 
         const unsubscribe = onSnapshot(uploadedFilesCollectionRef, (snapshot) => {
-            const fetchedFiles = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
+            const fetchedFiles = snapshot.docs.map(doc => {
+                const data = doc.data();
+                const fileData = {
+                    id: doc.id, // Firestore document ID
+                    ...data
+                };
+                
+                // Debug: Check if there's a custom id field that conflicts
+                if (data.id && data.id !== doc.id) {
+                    console.warn('File has conflicting ID fields:', {
+                        firestoreId: doc.id,
+                        customId: data.id,
+                        fileName: data.fileName
+                    });
+                }
+                
+                return fileData;
+            });
             fetchedFiles.sort((a, b) => (b.uploadDate?.toDate() || new Date()) - (a.uploadDate?.toDate() || new Date()));
             setUploadedFiles(fetchedFiles);
-            console.log("Uploaded files updated:", fetchedFiles.length);
+            console.log("Uploaded files updated:", fetchedFiles.length, "files:", fetchedFiles.map(f => ({ id: f.id, fileName: f.fileName })));
         }, (error) => {
             console.error("Error listening to uploaded files:", error);
         });
@@ -2068,7 +2082,6 @@ Suggested title and icon pairs:`;
 
                 // Save metadata to Firestore (including extracted content)
                 const fileMetadata = {
-                    id: crypto.randomUUID(),
                     fileName: file.name,
                     fileType: file.type,
                     fileSize: file.size,
@@ -2081,7 +2094,8 @@ Suggested title and icon pairs:`;
                     lastProcessed: Timestamp.now()
                 };
 
-                await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`), fileMetadata);
+                const docRef = await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`), fileMetadata);
+                console.log(`File ${file.name} uploaded with document ID: ${docRef.id}`);
                 console.log(`File ${file.name} uploaded successfully`);
             }
 
@@ -2116,12 +2130,78 @@ Suggested title and icon pairs:`;
 
         try {
             const activeUserId = userId || 'anonymous-user';
-            // Delete from Firestore
-            await deleteDoc(doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, fileId));
-            setSaveStatus('File deleted');
+            console.log('Attempting to delete file with ID:', fileId);
+            
+            // First, try to find the file document using the provided ID
+            let fileDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, fileId);
+            let fileDoc = await getDoc(fileDocRef);
+            
+            // If not found, maybe we need to search by custom ID field (for older files)
+            if (!fileDoc.exists()) {
+                console.log('Document not found with ID, searching by custom id field...');
+                
+                // Search for file with matching custom id field
+                const filesCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
+                const snapshot = await getDocs(query(filesCollectionRef));
+                
+                let foundDocId = null;
+                snapshot.docs.forEach(doc => {
+                    const data = doc.data();
+                    if (data.id === fileId) {
+                        foundDocId = doc.id;
+                        console.log('Found file by custom ID field:', fileId, '-> document ID:', doc.id);
+                    }
+                });
+                
+                if (foundDocId) {
+                    fileDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, foundDocId);
+                    fileDoc = await getDoc(fileDocRef);
+                } else {
+                    console.error('File document not found by either method:', fileId);
+                    setSaveStatus('File not found in database');
+                    return;
+                }
+            }
+
+            const fileData = fileDoc.data();
+            const downloadURL = fileData.downloadURL;
+            const fileName = fileData.fileName;
+            
+            console.log('Found file to delete:', fileName, 'URL:', downloadURL);
+            
+            // Extract the file path from the download URL and delete from Storage
+            if (downloadURL) {
+                try {
+                    // Extract the file path from the download URL
+                    const url = new URL(downloadURL);
+                    const pathMatch = url.pathname.match(/\/o\/(.+)/);
+                    if (pathMatch) {
+                        const encodedPath = pathMatch[1].split('?')[0]; // Remove query parameters
+                        const filePath = decodeURIComponent(encodedPath);
+                        
+                        // Create storage reference using the extracted path
+                        const storageRef = ref(storage, filePath);
+                        
+                        // Delete the file from Firebase Storage
+                        await deleteObject(storageRef);
+                        console.log('File deleted from Storage:', filePath);
+                    } else {
+                        console.warn('Could not extract file path from download URL:', downloadURL);
+                    }
+                } catch (storageError) {
+                    console.warn('Could not delete file from Storage (might already be deleted):', storageError);
+                    // Continue with Firestore deletion even if Storage deletion fails
+                }
+            }
+            
+            // Delete the metadata from Firestore using the correct document reference
+            await deleteDoc(fileDocRef);
+            console.log('File metadata deleted from Firestore');
+            
+            setSaveStatus('File deleted successfully');
         } catch (error) {
             console.error('Error deleting file:', error);
-            setSaveStatus('Error deleting file');
+            setSaveStatus('Error deleting file: ' + error.message);
         }
     };
 
@@ -3021,9 +3101,14 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
     };
 
     // Handle right panel resize
+    const dragStartXRef = useRef(null);
+    const dragStartWidthRef = useRef(null);
+
     const handleMouseDown = (e) => {
         e.preventDefault();
         resizeRef.current = true;
+        dragStartXRef.current = e.clientX;
+        dragStartWidthRef.current = rightPanelWidth;
         document.addEventListener('mousemove', handleMouseMove);
         document.addEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = 'col-resize';
@@ -3031,10 +3116,12 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
     };
 
     const handleMouseMove = (e) => {
-        if (!resizeRef.current) return;
+        if (!resizeRef.current || dragStartXRef.current === null || dragStartWidthRef.current === null) return;
         
         const windowWidth = window.innerWidth;
-        const newWidth = ((windowWidth - e.clientX) / windowWidth) * 100;
+        const mouseDeltaX = e.clientX - dragStartXRef.current;
+        const widthDeltaPercent = (mouseDeltaX / windowWidth) * 100;
+        const newWidth = dragStartWidthRef.current - widthDeltaPercent; // Subtract because moving right should decrease right panel width
         
         // Constrain width between 15% and 50%
         const constrainedWidth = Math.max(15, Math.min(50, newWidth));
@@ -3043,6 +3130,8 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
 
     const handleMouseUp = () => {
         resizeRef.current = false;
+        dragStartXRef.current = null;
+        dragStartWidthRef.current = null;
         document.removeEventListener('mousemove', handleMouseMove);
         document.removeEventListener('mouseup', handleMouseUp);
         document.body.style.cursor = '';
