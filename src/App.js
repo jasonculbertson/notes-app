@@ -3331,8 +3331,24 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
 
                 {/* External Search Suggestions */}
                 {externalSearchSuggestions.length > 0 && (
-                    <div className={`mb-4 p-3 rounded-md border ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-blue-50 border-blue-200'}`}>
-                        <h4 className={`text-sm font-medium mb-2 ${isDarkMode ? 'text-gray-200' : 'text-blue-800'}`}>
+                    <div className={`mb-4 p-3 rounded-md border relative ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-blue-50 border-blue-200'}`}>
+                        {/* Close Button */}
+                        <button
+                            onClick={() => setExternalSearchSuggestions([])}
+                            className={`absolute top-2 right-2 p-1 rounded-md transition-colors duration-200
+                                ${isDarkMode 
+                                    ? 'hover:bg-gray-600 text-gray-400 hover:text-gray-200' 
+                                    : 'hover:bg-blue-200 text-blue-600 hover:text-blue-800'
+                                }
+                            `}
+                            title="Close search suggestions"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/>
+                            </svg>
+                        </button>
+                        
+                        <h4 className={`text-sm font-medium mb-2 pr-6 ${isDarkMode ? 'text-gray-200' : 'text-blue-800'}`}>
                             🔍 Explore More Online
                         </h4>
                         <div className="flex flex-wrap gap-2">
