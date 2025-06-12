@@ -131,9 +131,6 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         { text: '⇤', command: 'outdent', title: 'Outdent' },
         { text: '"', command: 'formatBlock', value: 'blockquote', title: 'Quote' },
         { text: 'P', command: 'formatBlock', value: 'p', title: 'Paragraph' },
-        { text: '💡', command: 'insertCallout', value: 'info', title: 'Info Callout' },
-        { text: '⚠️', command: 'insertCallout', value: 'warning', title: 'Warning Callout' },
-        { text: '✅', command: 'insertCallout', value: 'success', title: 'Success Callout' },
         { text: '─', command: 'insertDivider', title: 'Divider' }
     ];
     
@@ -212,14 +209,22 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                 performUndo();
             } else if (btn.command === 'redo') {
                 performRedo();
-            } else if (btn.command === 'insertCallout') {
-                // Save current state before inserting callout
-                saveToUndoStack(editor.innerHTML);
-                insertCallout(btn.value);
             } else if (btn.command === 'insertDivider') {
                 // Save current state before inserting divider
                 saveToUndoStack(editor.innerHTML);
                 insertDivider();
+            } else if (btn.command === 'formatBlock') {
+                // Save current state before formatting
+                saveToUndoStack(editor.innerHTML);
+                insertHeading(btn.value);
+            } else if (btn.command === 'insertUnorderedList') {
+                // Save current state before inserting list
+                saveToUndoStack(editor.innerHTML);
+                insertList('ul');
+            } else if (btn.command === 'insertOrderedList') {
+                // Save current state before inserting list
+                saveToUndoStack(editor.innerHTML);
+                insertList('ol');
             } else if (btn.value) {
                 // Save current state before formatting
                 saveToUndoStack(editor.innerHTML);
@@ -309,17 +314,6 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
     };
 
     // Helper functions for custom elements
-    const insertCallout = (type) => {
-        const calloutHtml = `
-            <div class="notion-callout notion-callout-${type}" contenteditable="true">
-                <div class="notion-callout-icon">${getCalloutIcon(type)}</div>
-                <div class="notion-callout-content" contenteditable="true">Type your ${type} message here...</div>
-            </div>
-            <p><br></p>
-        `;
-        document.execCommand('insertHTML', false, calloutHtml);
-    };
-    
     const insertDivider = () => {
         const dividerHtml = `
             <div class="notion-divider">
@@ -330,13 +324,87 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         document.execCommand('insertHTML', false, dividerHtml);
     };
     
-    const getCalloutIcon = (type) => {
-        switch (type) {
-            case 'info': return '💡';
-            case 'warning': return '⚠️';
-            case 'success': return '✅';
-            case 'error': return '❌';
-            default: return '💡';
+    const insertHeading = (headingType) => {
+        const selection = window.getSelection();
+        const range = selection.getRangeAt(0);
+        
+        // Get the current line/block element
+        let currentElement = range.commonAncestorContainer;
+        if (currentElement.nodeType === Node.TEXT_NODE) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        // Find the closest block element
+        while (currentElement && currentElement !== editor && 
+               !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'BLOCKQUOTE'].includes(currentElement.tagName)) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        if (currentElement && currentElement !== editor) {
+            // Get the text content
+            const textContent = currentElement.textContent || '';
+            
+            // Create new heading element
+            const newElement = document.createElement(headingType.toUpperCase());
+            newElement.textContent = textContent || 'Heading';
+            
+            // Replace the current element
+            currentElement.parentNode.replaceChild(newElement, currentElement);
+            
+            // Set cursor at the end of the new heading
+            const newRange = document.createRange();
+            newRange.selectNodeContents(newElement);
+            newRange.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+        } else {
+            // No current block element, insert a new heading
+            const headingHtml = `<${headingType.toUpperCase()}>Heading</${headingType.toUpperCase()}><p><br></p>`;
+            document.execCommand('insertHTML', false, headingHtml);
+        }
+    };
+    
+    const insertList = (listType) => {
+        const selection = window.getSelection();
+        const range = selection.getRangeAt(0);
+        
+        // Get the current line/block element
+        let currentElement = range.commonAncestorContainer;
+        if (currentElement.nodeType === Node.TEXT_NODE) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        // Find the closest block element
+        while (currentElement && currentElement !== editor && 
+               !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'BLOCKQUOTE', 'LI'].includes(currentElement.tagName)) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        if (currentElement && currentElement !== editor) {
+            // Get the text content
+            const textContent = currentElement.textContent || '';
+            
+            // Create new list element
+            const listElement = document.createElement(listType.toUpperCase());
+            const listItem = document.createElement('LI');
+            listItem.textContent = textContent || 'List item';
+            listElement.appendChild(listItem);
+            
+            // Replace the current element
+            currentElement.parentNode.replaceChild(listElement, currentElement);
+            
+            // Set cursor at the end of the list item
+            const newRange = document.createRange();
+            newRange.selectNodeContents(listItem);
+            newRange.collapse(false);
+            selection.removeAllRanges();
+            selection.addRange(newRange);
+        } else {
+            // No current block element, insert a new list
+            const listHtml = listType === 'ul' 
+                ? `<ul><li>List item</li></ul><p><br></p>`
+                : `<ol><li>List item</li></ol><p><br></p>`;
+            document.execCommand('insertHTML', false, listHtml);
         }
     };
     
@@ -1400,6 +1468,7 @@ const App = () => {
             fetchedLinks.sort((a, b) => (b.addDate?.toDate() || new Date()) - (a.addDate?.toDate() || new Date()));
             setGoogleLinks(fetchedLinks);
             console.log("Google links updated:", fetchedLinks.length);
+            console.log("Google links IDs:", fetchedLinks.map(link => ({ id: link.id, title: link.title })));
         }, (error) => {
             console.error("Error listening to Google links:", error);
         });
@@ -2064,8 +2133,9 @@ Suggested title and icon pairs:`;
                 setFileUploadProgress(`Uploading ${file.name} (${i + 1}/${files.length})`);
 
                 // Create unique filename to avoid collisions
-                const uniqueFileName = `${file.name}_${crypto.randomUUID()}`;
-                const filePath = `user_uploads/${activeUserId}/uploaded_docs/${uniqueFileName}`;
+                const uuid = crypto.randomUUID();
+                const storageFileName = `${file.name}_${uuid}`;
+                const filePath = `user_uploads/${activeUserId}/uploaded_docs/${storageFileName}`;
 
                 // Create storage reference
                 const storageRef = ref(storage, filePath);
@@ -2082,7 +2152,8 @@ Suggested title and icon pairs:`;
 
                 // Save metadata to Firestore (including extracted content)
                 const fileMetadata = {
-                    fileName: file.name,
+                    fileName: file.name,                // Original file name for display
+                    storageFileName,                    // Actual file name in Storage (for function matching)
                     fileType: file.type,
                     fileSize: file.size,
                     downloadURL: downloadURL,
@@ -2094,7 +2165,10 @@ Suggested title and icon pairs:`;
                     lastProcessed: Timestamp.now()
                 };
 
-                const docRef = await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`), fileMetadata);
+                const docRef = await addDoc(
+                    collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`),
+                    fileMetadata
+                );
                 console.log(`File ${file.name} uploaded with document ID: ${docRef.id}`);
                 console.log(`File ${file.name} uploaded successfully`);
             }
@@ -2254,6 +2328,51 @@ Suggested title and icon pairs:`;
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     };
 
+    // Function to extract content from public Google Docs
+    const extractGoogleDocContent = async (url) => {
+        // Convert Google Docs URL to export format for plain text
+        // Example: https://docs.google.com/document/d/DOC_ID/edit -> https://docs.google.com/document/d/DOC_ID/export?format=txt
+        
+        let exportUrl = '';
+        
+        if (url.includes('/document/d/')) {
+            // Extract document ID
+            const match = url.match(/\/document\/d\/([a-zA-Z0-9-_]+)/);
+            if (match && match[1]) {
+                const docId = match[1];
+                exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+            }
+        }
+        
+        if (!exportUrl) {
+            throw new Error('Invalid Google Docs URL format');
+        }
+        
+        try {
+            const response = await fetch(exportUrl, {
+                method: 'GET',
+                mode: 'cors',
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: Document may not be publicly accessible`);
+            }
+            
+            const text = await response.text();
+            
+            if (text.trim().length === 0) {
+                throw new Error('Document appears to be empty or not accessible');
+            }
+            
+            return text;
+        } catch (error) {
+            if (error.message.includes('CORS') || error.message.includes('cors')) {
+                throw new Error('Document is not publicly accessible or sharing settings restrict access');
+            }
+            throw error;
+        }
+    };
+
     // File Management Functions - Phase 2: Google Links
     const handleAddGoogleLink = async (title, url) => {
         if (!title.trim() || !url.trim()) {
@@ -2270,13 +2389,35 @@ Suggested title and icon pairs:`;
         try {
             const linkType = url.includes('docs.google.com') ? 'google_doc' : 'google_sheet';
 
+            // Try to extract content if it's a public Google Doc
+            let extractedContent = '';
+            let contentExtracted = false;
+            
+            if (linkType === 'google_doc') {
+                try {
+                    setSaveStatus('Attempting to extract content from Google Doc...');
+                    const content = await extractGoogleDocContent(url);
+                    if (content) {
+                        extractedContent = content;
+                        contentExtracted = true;
+                        setSaveStatus('Content extracted successfully!');
+                    }
+                } catch (error) {
+                    console.log('Could not extract content automatically:', error.message);
+                    setSaveStatus('Link added (content extraction failed - document may not be public)');
+                }
+            }
+
             const linkMetadata = {
-                id: crypto.randomUUID(),
                 title: title.trim(),
                 url: url.trim(),
                 linkType: linkType,
                 addDate: Timestamp.now(),
-                associatedPageId: currentDocumentId || null
+                associatedPageId: currentDocumentId || null,
+                // Add extracted content if available
+                extractedContent: extractedContent,
+                contentExtracted: contentExtracted,
+                lastProcessed: Timestamp.now()
             };
 
             const activeUserId = userId || 'anonymous-user';
@@ -2287,7 +2428,10 @@ Suggested title and icon pairs:`;
             setGoogleLinkTitle('');
             setGoogleLinkUrl('');
             setShowAddGoogleLinkModal(false);
-            setSaveStatus('Google link added successfully');
+            
+            if (!contentExtracted) {
+                setSaveStatus('Google link added (for AI analysis, ensure doc is public or copy/paste content)');
+            }
         } catch (error) {
             console.error('Error adding Google link:', error);
             setSaveStatus('Error adding Google link');
@@ -2299,11 +2443,23 @@ Suggested title and icon pairs:`;
 
         try {
             const activeUserId = userId || 'anonymous-user';
-            await deleteDoc(doc(db, `artifacts/${appId}/users/${activeUserId}/google_links`, linkId));
+            console.log('Attempting to delete Google link with ID:', linkId);
+            console.log('Collection path:', `artifacts/${appId}/users/${activeUserId}/google_links`);
+            
+            const linkDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/google_links`, linkId);
+            await deleteDoc(linkDocRef);
+            console.log('Google link deleted successfully');
             setSaveStatus('Link deleted');
         } catch (error) {
-            console.error('Error deleting link:', error);
-            setSaveStatus('Error deleting link');
+            console.error('Error deleting Google link:', error);
+            console.error('Full error details:', {
+                code: error.code,
+                message: error.message,
+                linkId: linkId,
+                appId: appId,
+                userId: userId
+            });
+            setSaveStatus('Error deleting link: ' + error.message);
         }
     };
 
@@ -2564,8 +2720,21 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     return `Uploaded File: ${file.fileName}\nFile Type: ${file.fileType}\nSize: ${Math.round(file.fileSize / 1024)}KB\nContent:\n${file.extractedContent}`;
                 }).join('\n\n---\n\n');
 
-                // Combine documents and files
-                const allContent = [documentsText, uploadedFilesText].filter(text => text.trim()).join('\n\n===== UPLOADED FILES =====\n\n');
+                // Phase 3: Include Google Links (with content if available)
+                const googleLinksText = googleLinks.map(link => {
+                    let linkInfo = `Google Link: ${link.title}\nURL: ${link.url}\nType: ${link.linkType === 'google_doc' ? 'Google Doc' : 'Google Sheet'}`;
+                    
+                    if (link.contentExtracted && link.extractedContent) {
+                        linkInfo += `\nContent:\n${link.extractedContent}`;
+                    } else {
+                        linkInfo += `\nNote: Content not accessible - document may not be public. User should copy/paste relevant content if analysis is needed.`;
+                    }
+                    
+                    return linkInfo;
+                }).join('\n\n---\n\n');
+
+                // Combine documents, files, and Google links
+                const allContent = [documentsText, uploadedFilesText, googleLinksText].filter(text => text.trim()).join('\n\n===== UPLOADED FILES =====\n\n');
 
                 const contextualQuestion = `You are a helpful AI assistant analyzing a user's personal notes, documents, and uploaded files. Please provide accurate, helpful responses based on the content provided.
 
@@ -2575,8 +2744,11 @@ COMPLETE KNOWLEDGE BASE:
 ${allContent}
 
 Instructions:
-- Answer based on the documents and uploaded files provided above
-- You have access to both notes/documents and uploaded file contents
+- Answer based on the documents, uploaded files, and Google Links provided above
+- You have access to notes/documents, uploaded file contents, and some Google Docs content
+- For Google Links: Some may have extracted content (public docs), others may not (private/restricted docs)
+- If a Google Doc's content is not available, explain that the document may not be publicly accessible
+- Suggest making Google Docs public or copying/pasting content for analysis when content is not accessible
 - If the answer isn't in the provided content, clearly state that
 - Be specific and reference relevant document titles and file names when helpful
 - Cross-reference information between documents and uploaded files when relevant
@@ -3138,42 +3310,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
         document.body.style.userSelect = '';
     };
 
-    const handleExportDocument = () => {
-        if (!currentDocumentId) {
-            setLlmResponse("Please select a document to export.");
-            return;
-        }
-        const fileName = `${currentDocumentTitle || 'untitled'}.md`;
-        
-        // Handle both Editor.js (JSON) and HTML content for export
-        let plainTextContent = '';
-        if (currentDocumentContent) {
-            try {
-                // Try to parse as Editor.js format first
-                const parsed = JSON.parse(currentDocumentContent);
-                if (parsed.blocks) {
-                    plainTextContent = convertEditorToPlainText(parsed);
-                } else {
-                    // Fallback to HTML conversion
-                    plainTextContent = convertHtmlToPlainText(currentDocumentContent);
-                }
-            } catch (e) {
-                // Not JSON, treat as HTML/plain text
-                plainTextContent = convertHtmlToPlainText(currentDocumentContent);
-            }
-        }
-        
-        const blob = new Blob([plainTextContent], { type: 'text/markdown;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        setLlmResponse("Document exported successfully!");
-    };
+
 
     useEffect(() => {
         const handleClickOutside = (event) => {
@@ -3510,23 +3647,41 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                                     No Google links added
                                 </div>
                             ) : (
-                                googleLinks.map(link => (
+                                <>
+                                    <div className={`text-xs px-2 py-1 mb-2 ${isDarkMode ? 'text-blue-400 bg-blue-900/20' : 'text-blue-600 bg-blue-50'} rounded`}>
+                                        💡 Tip: Public Google Docs content auto-extracts for AI. Private docs need copy/paste.
+                                    </div>
+                                    {googleLinks.map(link => (
                                     <div key={link.id} className={`flex items-center px-2 py-1.5 rounded-md transition-colors group
                                         ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}
                                     `}>
                                         <span className="text-lg mr-2">{getLinkIcon(link.linkType)}</span>
                                         <div className="flex-1 min-w-0">
-                                            <button
-                                                onClick={() => window.open(link.url, '_blank')}
-                                                className={`text-sm truncate block w-full text-left hover:underline
-                                                    ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
-                                                `}
-                                                title={link.title}
-                                            >
-                                                {link.title}
-                                            </button>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => window.open(link.url, '_blank')}
+                                                    className={`text-sm truncate flex-1 text-left hover:underline
+                                                        ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
+                                                    `}
+                                                    title={link.title}
+                                                >
+                                                    {link.title}
+                                                </button>
+                                                {/* Content extraction indicator */}
+                                                {link.contentExtracted && (
+                                                    <span 
+                                                        className="text-green-500 text-xs" 
+                                                        title="Content extracted for AI assistant"
+                                                    >
+                                                        🧠
+                                                    </span>
+                                                )}
+                                            </div>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                                                 {link.linkType === 'google_doc' ? 'Google Doc' : 'Google Sheet'}
+                                                {link.contentExtracted && (
+                                                    <span className="ml-2 text-green-600">• AI Ready</span>
+                                                )}
                                             </div>
                                         </div>
                                         <button
@@ -3544,7 +3699,8 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                                             </svg>
                                         </button>
                                     </div>
-                                ))
+                                    ))}
+                                </>
                             )}
                         </div>
                     )}
@@ -3680,20 +3836,22 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                             </div>
                             
                             {/* Document Icon and Title */}
-                            <div className="flex items-start gap-3">
-                                <button
-                                    onClick={() => setShowIconPicker(!showIconPicker)}
-                                    className={`text-4xl hover:bg-gray-100 rounded-lg p-1 transition-colors duration-200 cursor-pointer
-                                        ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}
-                                    `}
-                                    title="Change icon"
-                                >
-                                    {currentDocumentIcon}
-                                </button>
+                            <div className="flex items-center mb-6">
+                                {currentDocumentIcon && (
+                                    <button
+                                        onClick={() => setShowIconPicker(!showIconPicker)}
+                                        className={`text-4xl hover:bg-gray-100 rounded-lg p-1 mr-3 transition-colors duration-200 cursor-pointer
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}
+                                        `}
+                                        title="Change icon"
+                                    >
+                                        {currentDocumentIcon}
+                                    </button>
+                                )}
                                 
                                 <input
                                     type="text"
-                                    className={`flex-1 text-4xl font-extrabold p-2 bg-transparent border-none focus:outline-none
+                                    className={`flex-1 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2
                                         ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
                                     value={currentDocumentTitle}
                                     onChange={(e) => setCurrentDocumentTitle(e.target.value)}
@@ -4023,16 +4181,6 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
 
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
-                        {currentDocumentId && (
-                            <button
-                                onClick={handleExportDocument}
-                                className={`ml-4 px-3 py-1 rounded-md text-xs font-medium
-                                    ${isDarkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}
-                                    transition-colors duration-200`}
-                            >
-                                Export (.md)
-                            </button>
-                        )}
                     </div>
                 </div>
             </div>
@@ -4366,10 +4514,20 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 .simple-rich-editor ul, .simple-rich-editor ol {
                     padding-left: 24px;
                     margin: 8px 0;
+                    list-style: revert;
+                }
+                
+                .simple-rich-editor ul {
+                    list-style-type: disc;
+                }
+                
+                .simple-rich-editor ol {
+                    list-style-type: decimal;
                 }
                 
                 .simple-rich-editor li {
                     margin: 4px 0;
+                    display: list-item;
                 }
                 
                 .simple-rich-editor p {
@@ -4398,59 +4556,6 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     position: absolute;
                 }
                 
-                /* Notion-like Callout Blocks */
-                .notion-callout {
-                    display: flex;
-                    align-items: flex-start;
-                    padding: 12px 16px;
-                    margin: 8px 0;
-                    border-radius: 8px;
-                    border-left: 4px solid;
-                    font-size: 14px;
-                    line-height: 1.5;
-                }
-                
-                .notion-callout-icon {
-                    font-size: 16px;
-                    margin-right: 8px;
-                    flex-shrink: 0;
-                    line-height: 1.5;
-                }
-                
-                .notion-callout-content {
-                    flex: 1;
-                    outline: none;
-                    min-height: 20px;
-                }
-                
-                /* Info Callout (Blue) */
-                .notion-callout-info {
-                    background-color: ${isDarkMode ? 'rgba(59, 130, 246, 0.1)' : 'rgba(59, 130, 246, 0.05)'};
-                    border-left-color: ${isDarkMode ? '#60a5fa' : '#3b82f6'};
-                    color: ${isDarkMode ? '#93c5fd' : '#1e40af'};
-                }
-                
-                /* Warning Callout (Yellow) */
-                .notion-callout-warning {
-                    background-color: ${isDarkMode ? 'rgba(245, 158, 11, 0.1)' : 'rgba(245, 158, 11, 0.05)'};
-                    border-left-color: ${isDarkMode ? '#fbbf24' : '#f59e0b'};
-                    color: ${isDarkMode ? '#fcd34d' : '#92400e'};
-                }
-                
-                /* Success Callout (Green) */
-                .notion-callout-success {
-                    background-color: ${isDarkMode ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.05)'};
-                    border-left-color: ${isDarkMode ? '#4ade80' : '#22c55e'};
-                    color: ${isDarkMode ? '#86efac' : '#166534'};
-                }
-                
-                /* Error Callout (Red) */
-                .notion-callout-error {
-                    background-color: ${isDarkMode ? 'rgba(239, 68, 68, 0.1)' : 'rgba(239, 68, 68, 0.05)'};
-                    border-left-color: ${isDarkMode ? '#f87171' : '#ef4444'};
-                    color: ${isDarkMode ? '#fca5a5' : '#991b1b'};
-                }
-                
                 /* Notion-like Dividers */
                 .notion-divider {
                     margin: 16px 0;
@@ -4467,12 +4572,6 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 }
                 
                 /* Hover effects for interactive elements */
-                .notion-callout:hover {
-                    transform: translateY(-1px);
-                    transition: transform 0.2s ease;
-                    box-shadow: 0 2px 8px ${isDarkMode ? 'rgba(0, 0, 0, 0.3)' : 'rgba(0, 0, 0, 0.1)'};
-                }
-                
                 .notion-divider:hover .notion-divider-line {
                     background-color: ${isDarkMode ? '#4b5563' : '#d1d5db'};
                     transition: background-color 0.2s ease;
