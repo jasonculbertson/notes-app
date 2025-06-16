@@ -100,6 +100,8 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         border-radius: 8px;
         background-color: ${isDarkMode ? '#1f2937' : '#ffffff'};
         overflow: hidden;
+        width: 100%;
+        box-sizing: border-box;
     `;
     
     // Create toolbar
@@ -122,6 +124,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         { text: 'B', command: 'bold', title: 'Bold (Ctrl+B)' },
         { text: 'I', command: 'italic', title: 'Italic (Ctrl+I)' },
         { text: 'U', command: 'underline', title: 'Underline (Ctrl+U)' },
+        { text: 'A', command: 'textColor', title: 'Text Color', isColorPicker: true },
         { text: 'H1', command: 'formatBlock', value: 'h1', title: 'Heading 1' },
         { text: 'H2', command: 'formatBlock', value: 'h2', title: 'Heading 2' },
         { text: 'H3', command: 'formatBlock', value: 'h3', title: 'Heading 3' },
@@ -133,6 +136,132 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         { text: 'P', command: 'formatBlock', value: 'p', title: 'Paragraph' },
         { text: '─', command: 'insertDivider', title: 'Divider' }
     ];
+
+    // Color picker functionality
+    let activeColorPicker = null;
+    
+    const createColorPicker = (button) => {
+        if (activeColorPicker) {
+            hideColorPicker();
+            return;
+        }
+        
+        const colors = [
+            '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
+            '#ff0000', '#ff6600', '#ffcc00', '#33cc33', '#0066cc', '#6600cc',
+            '#ff3366', '#ff9933', '#ffff33', '#66ff66', '#3399ff', '#9966ff',
+            '#cc0000', '#cc6600', '#cccc00', '#00cc00', '#0066ff', '#6600ff',
+            '#990000', '#994d00', '#999900', '#009900', '#004d99', '#4d0099'
+        ];
+        
+        const colorPicker = document.createElement('div');
+        colorPicker.style.cssText = `
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: ${isDarkMode ? '#374151' : 'white'};
+            border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
+            border-radius: 6px;
+            padding: 8px;
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 4px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            width: 160px;
+        `;
+        
+        colors.forEach(color => {
+            const colorButton = document.createElement('button');
+            colorButton.style.cssText = `
+                width: 20px;
+                height: 20px;
+                border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
+                border-radius: 3px;
+                background-color: ${color};
+                cursor: pointer;
+                transition: transform 0.1s ease;
+            `;
+            
+            colorButton.onmouseover = () => {
+                colorButton.style.transform = 'scale(1.1)';
+            };
+            
+            colorButton.onmouseout = () => {
+                colorButton.style.transform = 'scale(1)';
+            };
+            
+            colorButton.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                applyTextColor(color);
+                hideColorPicker();
+                editor.focus();
+            };
+            
+            colorPicker.appendChild(colorButton);
+        });
+        
+        // Add "Remove Color" option
+        const removeColorButton = document.createElement('button');
+        removeColorButton.innerHTML = '×';
+        removeColorButton.style.cssText = `
+            width: 20px;
+            height: 20px;
+            border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
+            border-radius: 3px;
+            background: ${isDarkMode ? '#4b5563' : '#f3f4f6'};
+            color: ${isDarkMode ? '#e5e7eb' : '#374151'};
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.1s ease;
+        `;
+        
+        removeColorButton.onmouseover = () => {
+            removeColorButton.style.background = isDarkMode ? '#6b7280' : '#e5e7eb';
+        };
+        
+        removeColorButton.onmouseout = () => {
+            removeColorButton.style.background = isDarkMode ? '#4b5563' : '#f3f4f6';
+        };
+        
+        removeColorButton.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            removeTextColor();
+            hideColorPicker();
+            editor.focus();
+        };
+        
+        colorPicker.appendChild(removeColorButton);
+        
+        button.style.position = 'relative';
+        button.appendChild(colorPicker);
+        activeColorPicker = colorPicker;
+    };
+    
+    const hideColorPicker = () => {
+        if (activeColorPicker && activeColorPicker.parentNode) {
+            activeColorPicker.parentNode.removeChild(activeColorPicker);
+            activeColorPicker = null;
+        }
+    };
+    
+    const applyTextColor = (color) => {
+        saveToUndoStack(editor.innerHTML);
+        document.execCommand('foreColor', false, color);
+    };
+    
+    const removeTextColor = () => {
+        saveToUndoStack(editor.innerHTML);
+        document.execCommand('removeFormat', false, null);
+        // Also try to remove color specifically
+        document.execCommand('foreColor', false, 'inherit');
+    };
     
     buttons.forEach((btn, index) => {
         // Add a visual separator after undo/redo buttons
@@ -150,26 +279,46 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         const button = document.createElement('button');
         button.innerHTML = btn.text;
         button.setAttribute('data-tooltip', btn.title);
-        button.style.cssText = `
-            padding: 6px 10px;
-            border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
-            background: ${isDarkMode ? '#374151' : 'white'};
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 500;
-            color: ${isDarkMode ? '#e5e7eb' : '#374151'};
-            transition: all 0.2s ease;
-            user-select: none;
-            position: relative;
-        `;
+        
+        // Special styling for color picker button
+        if (btn.isColorPicker) {
+            button.style.cssText = `
+                padding: 6px 10px;
+                border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
+                background: ${isDarkMode ? '#374151' : 'white'};
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 500;
+                color: #ff6b6b;
+                transition: all 0.2s ease;
+                user-select: none;
+                position: relative;
+            `;
+        } else {
+            button.style.cssText = `
+                padding: 6px 10px;
+                border: 1px solid ${isDarkMode ? '#4b5563' : '#d1d5db'};
+                background: ${isDarkMode ? '#374151' : 'white'};
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 12px;
+                font-weight: 500;
+                color: ${isDarkMode ? '#e5e7eb' : '#374151'};
+                transition: all 0.2s ease;
+                user-select: none;
+                position: relative;
+            `;
+        }
         
         let tooltipTimeout;
         
         button.onmouseover = () => {
             button.style.background = isDarkMode ? '#4b5563' : '#f3f4f6';
             button.style.borderColor = isDarkMode ? '#6b7280' : '#9ca3af';
-            button.style.color = isDarkMode ? '#f9fafb' : '#1f2937';
+            if (!btn.isColorPicker) {
+                button.style.color = isDarkMode ? '#f9fafb' : '#1f2937';
+            }
             button.style.transform = 'translateY(-1px)';
             button.style.boxShadow = isDarkMode ? '0 2px 4px rgba(0, 0, 0, 0.3)' : '0 2px 4px rgba(0, 0, 0, 0.1)';
             
@@ -182,7 +331,11 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         button.onmouseout = () => {
             button.style.background = isDarkMode ? '#374151' : 'white';
             button.style.borderColor = isDarkMode ? '#4b5563' : '#d1d5db';
-            button.style.color = isDarkMode ? '#e5e7eb' : '#374151';
+            if (btn.isColorPicker) {
+                button.style.color = '#ff6b6b';
+            } else {
+                button.style.color = isDarkMode ? '#e5e7eb' : '#374151';
+            }
             button.style.transform = 'translateY(0)';
             button.style.boxShadow = 'none';
             
@@ -203,6 +356,12 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         
         button.onclick = (e) => {
             e.preventDefault();
+            
+            if (btn.command === 'textColor') {
+                createColorPicker(button);
+                return;
+            }
+            
             editor.focus();
             
             if (btn.command === 'undo') {
@@ -238,6 +397,13 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         };
         
         toolbar.appendChild(button);
+    });
+    
+    // Hide color picker when clicking outside
+    document.addEventListener('click', (e) => {
+        if (activeColorPicker && !activeColorPicker.contains(e.target) && !e.target.closest('[data-tooltip="Text Color"]')) {
+            hideColorPicker();
+        }
     });
     
     // Tooltip management
@@ -424,6 +590,10 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         background: transparent;
         overflow-y: auto;
         min-height: 0;
+        width: 100%;
+        box-sizing: border-box;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     `;
     
     // Set initial content
@@ -1502,15 +1672,15 @@ const App = () => {
 
     // Emoji categories and data for icon picker
     const emojiCategories = {
-        'Smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩'],
-        'Objects': ['📱', '💻', '⌨️', '🖥️', '🖨️', '📞', '📠', '📺', '📻', '🎵', '🎶', '📢', '📣', '📯', '🔔', '🔕'],
-        'Work': ['💼', '📊', '📈', '📉', '📋', '📌', '📍', '📎', '🖇️', '📏', '📐', '✂️', '📝', '✏️', '✒️', '🖊️'],
-        'Study': ['📚', '📖', '📓', '📔', '📒', '📕', '📗', '📘', '📙', '📰', '🗞️', '📜', '⭐', '🌟', '💡', '🔍'],
-        'Food': ['🍎', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅'],
-        'Travel': ['✈️', '🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🏍️'],
-        'Activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍'],
-        'Nature': ['🌱', '🌿', '🍀', '🍃', '🌸', '🌺', '🌻', '🌹', '🌷', '🌼', '🌵', '🌲', '🌳', '🌴', '☘️', '🍄'],
-        'Symbols': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖']
+        'Smileys': ['😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂', '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩', '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏', '😒', '🙄', '😬', '🤥', '😌', '😔', '😪', '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '🥵', '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎', '🤓', '🧐'],
+        'Objects': ['📱', '💻', '⌨️', '🖥️', '🖨️', '📞', '📠', '📺', '📻', '🎵', '🎶', '📢', '📣', '📯', '🔔', '🔕', '🎤', '🎧', '📷', '📸', '📹', '🎥', '📽️', '🎬', '📺', '📻', '🎙️', '🎚️', '🎛️', '⏱️', '⏲️', '⏰', '🕰️', '⌚', '📱', '📲', '💻', '⌨️', '🖥️', '🖨️', '🖱️', '🖲️', '💽', '💾', '💿', '📀', '🧮', '🎮', '🕹️', '📷', '📸', '📹', '🎥'],
+        'Work': ['💼', '📊', '📈', '📉', '📋', '📌', '📍', '📎', '🖇️', '📏', '📐', '✂️', '📝', '✏️', '✒️', '🖊️', '🖋️', '✏️', '📝', '📄', '📃', '📑', '📊', '📈', '📉', '🗂️', '📅', '📆', '🗓️', '📇', '🗃️', '🗳️', '🗄️', '📋', '📌', '📍', '📎', '🖇️', '📏', '📐', '✂️', '🗂️', '📁', '📂', '🗂️', '🗞️', '📰', '📓', '📔', '📒', '📕', '📗', '📘', '📙', '📚'],
+        'Study': ['📚', '📖', '📓', '📔', '📒', '📕', '📗', '📘', '📙', '📰', '🗞️', '📜', '⭐', '🌟', '💡', '🔍', '🔎', '🔬', '🔭', '📡', '💉', '💊', '🧬', '🦠', '🧫', '🧪', '🌡️', '🧹', '🧺', '🧻', '🚽', '🚿', '🛁', '🛀', '🧴', '🧷', '🧸', '🧵', '🧶', '🥽', '🥼', '🦺', '👔', '👕', '👖', '🧣', '🧤', '🧥', '🧦', '👗', '👘', '🥻', '🩱', '🩲', '🩳'],
+        'Food': ['🍎', '🍊', '🍋', '🍌', '🍉', '🍇', '🍓', '🫐', '🍈', '🍒', '🍑', '🥭', '🍍', '🥥', '🥝', '🍅', '🍆', '🥑', '🥦', '🥬', '🥒', '🌶️', '🫑', '🌽', '🥕', '🫒', '🧄', '🧅', '🥔', '🍠', '🥐', '🥖', '🍞', '🥨', '🥯', '🧀', '🥚', '🍳', '🧈', '🥞', '🧇', '🥓', '🥩', '🍗', '🍖', '🌭', '🍔', '🍟', '🍕', '🫓', '🥙', '🌮', '🌯', '🫔', '🥗', '🥘', '🫕', '🍝', '🍜', '🍲', '🍛', '🍣', '🍱', '🥟', '🦪', '🍤', '🍙', '🍚', '🍘', '🍥', '🥠', '🥮', '🍢', '🍡', '🍧', '🍨', '🍦', '🥧', '🧁', '🍰', '🎂', '🍮', '🍭', '🍬', '🍫', '🍿', '🍩', '🍪', '🌰', '🥜', '🍯'],
+        'Travel': ['✈️', '🚗', '🚕', '🚙', '🚌', '🚎', '🏎️', '🚓', '🚑', '🚒', '🚐', '🛻', '🚚', '🚛', '🚜', '🏍️', '🛵', '🚲', '🛴', '🛹', '🛼', '🚁', '🛸', '🚀', '🛰️', '💺', '🛶', '⛵', '🚤', '🛥️', '🛳️', '⛴️', '🚢', '⚓', '⛽', '🚧', '🚨', '🚥', '🚦', '🛑', '🚏', '🗺️', '🗿', '🗽', '🗼', '🏰', '🏯', '🏟️', '🎡', '🎢', '🎠', '⛲', '⛱️', '🏖️', '🏝️', '🏜️', '🌋', '⛰️', '🏔️', '🗻', '🏕️', '⛺', '🏠', '🏡', '🏘️', '🏚️', '🏗️', '🏭', '🏢', '🏬', '🏣', '🏤', '🏥', '🏦', '🏨', '🏪', '🏫', '🏩', '💒', '🏛️', '⛪', '🕌', '🛕', '🕍', '⛩️', '🕋'],
+        'Activities': ['⚽', '🏀', '🏈', '⚾', '🥎', '🎾', '🏐', '🏉', '🥏', '🎱', '🪀', '🏓', '🏸', '🏒', '🏑', '🥍', '🏏', '🪃', '🥅', '⛳', '🪁', '🏹', '🎣', '🤿', '🥊', '🥋', '🎽', '🛹', '🛷', '⛸️', '🥌', '🎿', '⛷️', '🏂', '🪂', '🏋️‍♀️', '🏋️‍♂️', '🤼‍♀️', '🤼‍♂️', '🤸‍♀️', '🤸‍♂️', '⛹️‍♀️', '⛹️‍♂️', '🤺', '🤾‍♀️', '🤾‍♂️', '🏌️‍♀️', '🏌️‍♂️', '🏇', '🧘‍♀️', '🧘‍♂️', '🏄‍♀️', '🏄‍♂️', '🏊‍♀️', '🏊‍♂️', '🤽‍♀️', '🤽‍♂️', '🚣‍♀️', '🚣‍♂️', '🧗‍♀️', '🧗‍♂️', '🚵‍♀️', '🚵‍♂️', '🚴‍♀️', '🚴‍♂️', '🏆', '🥇', '🥈', '🥉', '🏅', '🎖️', '🏵️', '🎗️'],
+        'Nature': ['🌱', '🌿', '🍀', '🍃', '🌸', '🌺', '🌻', '🌹', '🌷', '🌼', '🌵', '🌲', '🌳', '🌴', '☘️', '🍄', '🌾', '💐', '🌷', '🌹', '🥀', '🌺', '🌸', '🌼', '🌻', '🌞', '🌝', '🌛', '🌜', '🌚', '🌕', '🌖', '🌗', '🌘', '🌑', '🌒', '🌓', '🌔', '🌙', '🌎', '🌍', '🌏', '🪐', '💫', '⭐', '🌟', '✨', '⚡', '☄️', '💥', '🔥', '🌪️', '🌈', '☀️', '🌤️', '⛅', '🌦️', '🌧️', '⛈️', '🌩️', '🌨️', '❄️', '☃️', '⛄', '🌬️', '💨', '💧', '💦', '☔', '☂️', '🌊', '🌫️'],
+        'Symbols': ['❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '☮️', '✝️', '☪️', '🕉️', '☸️', '✡️', '🔯', '🕎', '☯️', '☦️', '🛐', '⛎', '♈', '♉', '♊', '♋', '♌', '♍', '♎', '♏', '♐', '♑', '♒', '♓', '🆔', '⚛️', '🉑', '☢️', '☣️', '📴', '📳', '🈶', '🈚', '🈸', '🈺', '🈷️', '✴️', '🆚', '💮', '🉐', '㊙️', '㊗️', '🈴', '🈵', '🈹', '🈲', '🅰️', '🅱️', '🆎', '🆑', '🅾️', '🆘', '❌', '⭕', '🛑', '⛔', '📛', '🚫', '💯', '💢', '♨️', '🚷', '🚯', '🚳', '🚱', '🔞', '📵', '🚭']
     };
 
     const emojiData = {
@@ -1528,6 +1698,47 @@ const App = () => {
         '😉': ['wink', 'flirt', 'playful'],
         '😊': ['happy', 'smile', 'blush'],
         '😇': ['angel', 'innocent', 'halo'],
+        '😋': ['yummy', 'delicious', 'tasty', 'tongue'],
+        '😛': ['tongue', 'playful', 'silly'],
+        '😜': ['wink', 'tongue', 'playful'],
+        '🤪': ['crazy', 'wild', 'silly', 'fun'],
+        '😝': ['tongue', 'silly', 'playful'],
+        '🤑': ['money', 'rich', 'dollar', 'greedy'],
+        '🤗': ['hug', 'embrace', 'love', 'care'],
+        '🤭': ['giggle', 'secret', 'shy'],
+        '🤫': ['quiet', 'secret', 'shh'],
+        '🤔': ['thinking', 'hmm', 'consider'],
+        '🤐': ['quiet', 'zip', 'silent'],
+        '🤨': ['suspicious', 'doubt', 'skeptical'],
+        '😐': ['neutral', 'meh', 'blank'],
+        '😑': ['expressionless', 'meh', 'blank'],
+        '😶': ['silent', 'quiet', 'speechless'],
+        '😏': ['smirk', 'sly', 'confident'],
+        '😒': ['unamused', 'bored', 'annoyed'],
+        '🙄': ['eye roll', 'annoyed', 'whatever'],
+        '😬': ['grimace', 'awkward', 'nervous'],
+        '🤥': ['lie', 'pinocchio', 'dishonest'],
+        '😌': ['relieved', 'peaceful', 'content'],
+        '😔': ['sad', 'disappointed', 'down'],
+        '😪': ['sleepy', 'tired', 'drowsy'],
+        '🤤': ['drool', 'hungry', 'desire'],
+        '😴': ['sleep', 'tired', 'zzz'],
+        '😷': ['sick', 'mask', 'ill'],
+        '🤒': ['sick', 'fever', 'thermometer'],
+        '🤕': ['hurt', 'injured', 'bandage'],
+        '🤢': ['nauseous', 'sick', 'green'],
+        '🤮': ['vomit', 'sick', 'disgusted'],
+        '🤧': ['sneeze', 'sick', 'tissue'],
+        '🥵': ['hot', 'sweating', 'heat'],
+        '🥶': ['cold', 'freezing', 'blue'],
+        '🥴': ['dizzy', 'drunk', 'woozy'],
+        '😵': ['dizzy', 'confused', 'knocked out'],
+        '🤯': ['mind blown', 'shocked', 'explode'],
+        '🤠': ['cowboy', 'hat', 'western'],
+        '🥳': ['party', 'celebrate', 'birthday'],
+        '😎': ['cool', 'sunglasses', 'awesome'],
+        '🤓': ['nerd', 'geek', 'smart'],
+        '🧐': ['monocle', 'fancy', 'inspect'],
         '🥰': ['love', 'happy', 'hearts'],
         '😍': ['love', 'heart', 'eyes'],
         '🤩': ['star', 'excited', 'wow'],
@@ -2400,6 +2611,13 @@ const App = () => {
         };
     }, [currentDocumentContent, currentDocumentTitle, currentDocumentTags, currentDocumentId, db, userId, isAuthReady, appId]);
 
+    // Auto-scroll to bottom of AI chat when new messages appear
+    useEffect(() => {
+        if (llmResponseRef.current) {
+            llmResponseRef.current.scrollTop = llmResponseRef.current.scrollHeight;
+        }
+    }, [chatHistory, llmResponse, llmLoading, aiTransformLoading, aiTitleIconSuggestions]);
+
     const handleAddTag = (tag) => {
         const newTag = tag.trim().toLowerCase();
         if (newTag && !currentDocumentTags.includes(newTag)) {
@@ -2846,14 +3064,12 @@ Return only the expanded text without any additional commentary.`;
 
     // Icon picker functionality
     const getFilteredEmojis = () => {
-        let emojis = activeIconCategory === 'All' 
-            ? Object.values(emojiCategories).flat()
-            : emojiCategories[activeIconCategory] || [];
-        
+        // If there's a search term, search across ALL categories
         if (iconSearchTerm && iconSearchTerm.trim()) {
             const searchLower = iconSearchTerm.toLowerCase().trim();
+            const allEmojis = Object.values(emojiCategories).flat();
             
-            emojis = emojis.filter(emoji => {
+            return allEmojis.filter(emoji => {
                 const keywords = emojiData[emoji] || [];
                 
                 // Check if any keyword contains the search term
@@ -2867,6 +3083,11 @@ Return only the expanded text without any additional commentary.`;
                 return hasKeywordMatch || hasEmojiMatch;
             });
         }
+        
+        // If no search term, show category-specific emojis
+        let emojis = activeIconCategory === 'All' 
+            ? Object.values(emojiCategories).flat()
+            : emojiCategories[activeIconCategory] || [];
         
         return emojis;
     };
@@ -4147,16 +4368,16 @@ Content: ${currentContent || '(Empty document)'}`;
                 const systemMessage = {
                     role: "user",
                     parts: [{
-                        text: `You are a helpful AI assistant with document creation capabilities. 
+                        text: `You are a helpful AI assistant with document and page creation capabilities. 
 
 CRITICAL INSTRUCTIONS:
-- Only create documents when users explicitly ask to "create a document", "make a document", "save this information", or use similar explicit creation language
+- Only create documents/pages when users explicitly ask to "create a document", "create a page", "make a document", "make a page", "save this information", or use similar explicit creation language
 - When users ask to add content, you MUST call the appendContentToDocument function
 - When users ask to clean up, reformat, or organize content, you MUST call the cleanUpPage function
 - For general questions and conversations, provide helpful answers directly in the chat
 - Never just say you will create something - actually call the function when explicitly requested
-- Use comprehensive HTML content with proper formatting when creating documents
-- When users refer to "this page", "the current document", "this document", or "the one that is open now", they mean the currently open document shown below
+- Use comprehensive HTML content with proper formatting when creating documents/pages
+- When users refer to "this page", "the current document", "this document", "the current page", or "the one that is open now", they mean the currently open document shown below
 
 AVAILABLE FUNCTIONS:
 - createNewDocument: Use ONLY for explicit document creation requests
@@ -4177,22 +4398,22 @@ Answer conversational questions directly in the chat. Only create documents when
             function_declarations: [
                 {
                     name: "createNewDocument",
-                    description: "Create a new document with HTML content. Use this ONLY when the user explicitly asks to create a document, make a document, or save information as a document. Do NOT use for general questions or conversations.",
+                    description: "Create a new document or page with HTML content. Use this ONLY when the user explicitly asks to create a document, create a page, make a document, make a page, or save information as a document/page. Do NOT use for general questions or conversations.",
                     parameters: {
                         type: "OBJECT",
                         properties: {
                             title: {
                                 type: "STRING",
-                                description: "The title for the new document"
+                                description: "The title for the new document or page"
                             },
                             htmlContent: {
                                 type: "STRING", 
-                                description: "The HTML content for the document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em>, etc."
+                                description: "The HTML content for the document or page. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em>, etc."
                             },
                             tags: {
                                 type: "ARRAY",
                                 items: { type: "STRING" },
-                                description: "Optional array of tags for the document"
+                                description: "Optional array of tags for the document or page"
                             }
                         },
                         required: ["title", "htmlContent"]
@@ -5596,22 +5817,24 @@ Answer conversational questions directly in the chat. Only create documents when
                                         </div>
                                     </div>
                                     
-                                    {/* Categories */}
-                                    <div className={`flex overflow-x-auto p-2 border-b ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
-                                        {Object.keys(emojiCategories).map(category => (
-                                            <button
-                                                key={category}
-                                                onClick={() => setActiveIconCategory(category)}
-                                                className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap mr-1 transition-colors
-                                                    ${activeIconCategory === category 
-                                                        ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
-                                                        : (isDarkMode ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100')
-                                                    }`}
-                                            >
-                                                {category}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    {/* Categories - Hide when searching */}
+                                    {!iconSearchTerm.trim() && (
+                                        <div className={`flex overflow-x-auto p-2 border-b ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}>
+                                            {Object.keys(emojiCategories).map(category => (
+                                                <button
+                                                    key={category}
+                                                    onClick={() => setActiveIconCategory(category)}
+                                                    className={`px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap mr-1 transition-colors
+                                                        ${activeIconCategory === category 
+                                                            ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
+                                                            : (isDarkMode ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700' : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100')
+                                                        }`}
+                                                >
+                                                    {category}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
                                     
                                     {/* Icon Grid */}
                                     <div className="p-3 max-h-64 overflow-y-auto">
