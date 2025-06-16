@@ -4505,8 +4505,8 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
 
                     {currentDocumentId && (
                         <>
-                            {/* Tags input/display - Phase 5: Streamlined with integrated AI */}
-                            <div ref={tagInputContainerRef} className="relative flex flex-wrap items-center gap-2 mb-4 group">
+                            {/* Tags input/display - Phase 5: Simplified with plus button AI actions */}
+                            <div ref={tagInputContainerRef} className="flex flex-wrap items-center gap-2 mb-4">
                                 {currentDocumentTags.map((tag, idx) => (
                                     <span key={idx} className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
                                         ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-blue-100 text-blue-800'}
@@ -4526,10 +4526,10 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                 ))}
                                 <input
                                     type="text"
-                                    className={`flex-grow min-w-[100px] max-w-xs p-1.5 rounded-md text-sm pr-8
+                                    className={`flex-grow min-w-[100px] max-w-xs p-1.5 rounded-md text-sm
                                         ${isDarkMode ? 'bg-gray-700 text-gray-200 placeholder-gray-400 border-gray-600' : 'bg-gray-50 text-gray-800 placeholder-gray-500 border-gray-300'}
                                         border focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                                    placeholder="Add tag (e.g., 'work, idea')"
+                                    placeholder="Add tag (e.g., 'work, idea') or use + button for AI suggestions"
                                     onKeyPress={(e) => {
                                         if (e.key === 'Enter') {
                                             e.preventDefault(); // Prevent new line in editor
@@ -4539,20 +4539,6 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                         }
                                     }}
                                 />
-                                {/* AI Tags Icon inside input area */}
-                                <button
-                                    onClick={handleTriggerAiTagSuggestions}
-                                    className={`absolute right-0 top-1/2 -translate-y-1/2 mr-1 p-1 rounded-md
-                                        ${isDarkMode ? 'text-gray-400 hover:bg-gray-600' : 'text-gray-600 hover:bg-gray-200'}
-                                        opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200`}
-                                    title="Suggest AI Tags"
-                                    disabled={llmLoading || !currentDocumentId}
-                                >
-                                    {/* AI icon (magic wand) */}
-                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
-                                        <path d="M11.085 14.887A2.002 2.002 0 0013 13h1a2 2 0 001.912-1.412A2 2.002 0 0017 10V9a2 2 0 00-1.088-1.722A2 2.002 0 0013 6h-1.085l-.57-.57a1 1 0 00-1.414 0L9 5.293V4a1 1 0 00-2 0v1.293L5.414 7.293A1 1 0 004 8h-1a1 1 0 00-1 1v1a1 1 0 001 1h1a1 1 0 001 1v1.085l.57.57a1 1 0 001.414 0L10 14.707V16a1 1 0 002 0v-1.293l1.586-1.586A2.002 2.002 0 0011.085 14.887zM10 2a1 1 0 00-1 1v1a1 1 0 102 0V3a1 1 0 00-1-1z" clipRule="evenodd" fillRule="evenodd"></path>
-                                    </svg>
-                                </button>
 
                                 {/* AI Tag Suggestions Display */}
                                 {aiTagSuggestions.length > 0 && (
@@ -4798,20 +4784,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                     )}
                 </div>
 
-                {/* Phase 5: AI Assistant Quick Actions */}
-                {currentDocumentId && (
-                    <div className="mb-4">
-                        <button
-                            onClick={() => askLlm("Suggest a good title and relevant icon for the current document based on its content.")}
-                            className={`w-full px-3 py-2 rounded-md text-sm font-medium text-white
-                                ${currentDocumentId ? 'bg-purple-500 hover:bg-purple-600' : 'bg-gray-400 cursor-not-allowed'}
-                                transition-colors duration-200 shadow-sm`}
-                            disabled={llmLoading || !currentDocumentId}
-                        >
-                            Suggest Title & Icon
-                        </button>
-                    </div>
-                )}
+
 
                 {/* External Search Suggestions */}
                 {externalSearchSuggestions.length > 0 && (
@@ -4868,7 +4841,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         className={`absolute left-2 top-1/2 transform -translate-y-1/2 z-10 w-6 h-6 rounded-full flex items-center justify-center transition-colors duration-200
                             ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-600'}
                         `}
-                        title="Add files or connect apps"
+                        title="Add content, files, or use AI actions"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
@@ -4898,9 +4871,68 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         `}>
                             <div className="p-3">
                                 <h3 className={`text-sm font-medium mb-3 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                                    Add Content
+                                    Add Content & AI Actions
                                 </h3>
                                 
+                                {/* AI Title & Icon Suggestions */}
+                                {currentDocumentId && (
+                                    <button
+                                        onClick={() => {
+                                            askLlm("Suggest a good title and relevant icon for the current document based on its content.");
+                                            setShowPlusOverlay(false);
+                                        }}
+                                        className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
+                                            ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                        `}
+                                    >
+                                        <div className={`w-8 h-8 rounded-md flex items-center justify-center mr-3
+                                            ${isDarkMode ? 'bg-purple-600' : 'bg-purple-100'}
+                                        `}>
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-medium">Suggest Title & Icon</div>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                AI-powered title and icon suggestions
+                                            </div>
+                                        </div>
+                                    </button>
+                                )}
+
+                                {/* AI Tag Suggestions */}
+                                {currentDocumentId && (
+                                    <button
+                                        onClick={() => {
+                                            handleTriggerAiTagSuggestions();
+                                            setShowPlusOverlay(false);
+                                        }}
+                                        className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
+                                            ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                        `}
+                                    >
+                                        <div className={`w-8 h-8 rounded-md flex items-center justify-center mr-3
+                                            ${isDarkMode ? 'bg-indigo-600' : 'bg-indigo-100'}
+                                        `}>
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7A.997.997 0 012 10V5a3 3 0 013-3h5c.256 0 .512.098.707.293l7 7zM5 6a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-medium">Suggest Tags</div>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                AI-powered tag suggestions
+                                            </div>
+                                        </div>
+                                    </button>
+                                )}
+
+                                {/* Divider */}
+                                {currentDocumentId && (
+                                    <div className={`border-t my-2 ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}`}></div>
+                                )}
+
                                 {/* File Upload Option */}
                                 <button
                                     onClick={handleFileUploadFromOverlay}
