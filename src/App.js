@@ -2155,34 +2155,105 @@ Suggested title and icon pairs:`;
         }
     };
 
-    // Phase 5: AI Title & Icon Suggestions Handler
-    const handleTriggerAiTitleIconSuggestions = () => {
+    // Phase 5: AI Title & Icon Suggestions Handler - Silent background processing
+    const handleTriggerAiTitleIconSuggestions = async () => {
         if (!currentDocumentId || !currentDocumentContent) return;
+        
         const plainTextContent = convertHtmlToPlainText(currentDocumentContent);
-        const prompt = `Based on the following document content, suggest a good title and relevant icon:
+        const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
+        
+        if (!apiKey) {
+            console.error('API key not found for AI suggestions');
+            return;
+        }
+
+        try {
+            const prompt = `Based on the following document content, suggest a good title and relevant icon:
 
 DOCUMENT TITLE: ${currentDocumentTitle || 'Untitled'}
 DOCUMENT CONTENT:
 ${plainTextContent}
 
-Please analyze the content and suggest an appropriate title and icon.`;
-        
-        askLlm(prompt);
+Please analyze the content and suggest an appropriate title and icon. Respond with a JSON object containing "title" and "icon" fields.`;
+
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "OBJECT",
+                            properties: {
+                                title: { type: "STRING" },
+                                icon: { type: "STRING" }
+                            },
+                            required: ["title", "icon"]
+                        }
+                    }
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const suggestion = JSON.parse(data.candidates[0].content.parts[0].text);
+                setAiTitleIconSuggestions([suggestion]);
+            }
+        } catch (error) {
+            console.error('Error getting AI title/icon suggestions:', error);
+        }
     };
 
-    // Phase 5: AI Tag Suggestions Handler
-    const handleTriggerAiTagSuggestions = () => {
+    // Phase 5: AI Tag Suggestions Handler - Silent background processing
+    const handleTriggerAiTagSuggestions = async () => {
         if (!currentDocumentId || !currentDocumentContent) return;
+        
         const plainTextContent = convertHtmlToPlainText(currentDocumentContent);
-        const prompt = `Based on the following document content, suggest relevant tags:
+        const apiKey = process.env.REACT_APP_GEMINI_API_KEY;
+        
+        if (!apiKey) {
+            console.error('API key not found for AI suggestions');
+            return;
+        }
+
+        try {
+            const prompt = `Based on the following document content, suggest relevant tags:
 
 DOCUMENT TITLE: ${currentDocumentTitle || 'Untitled'}
 DOCUMENT CONTENT:
 ${plainTextContent}
 
-Please analyze the content and suggest appropriate tags.`;
-        
-        askLlm(prompt);
+Please analyze the content and suggest 3-5 relevant tags. Respond with a JSON array of strings.`;
+
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{ role: "user", parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseMimeType: "application/json",
+                        responseSchema: {
+                            type: "ARRAY",
+                            items: { type: "STRING" }
+                        }
+                    }
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const tags = JSON.parse(data.candidates[0].content.parts[0].text);
+                setAiTagSuggestions(tags);
+                
+                // Auto-dismiss after 10 seconds
+                setTimeout(() => {
+                    setAiTagSuggestions([]);
+                }, 10000);
+            }
+        } catch (error) {
+            console.error('Error getting AI tag suggestions:', error);
+        }
     };
 
     // Icon picker functionality
@@ -4371,11 +4442,11 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                             </div>
                             
                             {/* Document Icon and Title */}
-                            <div className="flex items-center mb-6">
+                            <div className="flex items-center mb-6 pr-32">
                                 {currentDocumentIcon && (
                                     <button
                                         onClick={() => setShowIconPicker(!showIconPicker)}
-                                        className={`text-4xl hover:bg-gray-100 rounded-lg p-1 mr-3 transition-colors duration-200 cursor-pointer
+                                        className={`text-4xl hover:bg-gray-100 rounded-lg p-1 mr-3 transition-colors duration-200 cursor-pointer flex-shrink-0
                                             ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}
                                         `}
                                         title="Change icon"
@@ -4386,7 +4457,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                 
                                 <input
                                     type="text"
-                                    className={`flex-1 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2
+                                    className={`flex-1 min-w-0 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2
                                         ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
                                     value={currentDocumentTitle}
                                     onChange={(e) => setCurrentDocumentTitle(e.target.value)}
