@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
 
 // Main App component
@@ -734,6 +734,19 @@ const App = () => {
     const [googleLinkTitle, setGoogleLinkTitle] = useState('');
     const [googleLinkUrl, setGoogleLinkUrl] = useState('');
     const [showGoogleLinksSection, setShowGoogleLinksSection] = useState(true);
+
+    // ChatGPT-style Plus Button Overlay State
+    const [showPlusOverlay, setShowPlusOverlay] = useState(false);
+    const [showGoogleDriveOptions, setShowGoogleDriveOptions] = useState(false);
+
+    // Phase 4: User Confirmation Modals State
+    const [showConfirmationModal, setShowConfirmationModal] = useState(false);
+    const [pendingAction, setPendingAction] = useState(null);
+    const [previewContent, setPreviewContent] = useState('');
+    const [confirmationTitle, setConfirmationTitle] = useState('');
+    const [confirmationMessage, setConfirmationMessage] = useState('');
+    const [isEditingPreview, setIsEditingPreview] = useState(false);
+    const [editedPreviewContent, setEditedPreviewContent] = useState('');
 
     // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
     const handleTextSelection = useCallback(() => {
@@ -2296,6 +2309,126 @@ Suggested title and icon pairs:`;
         }
     };
 
+    // ChatGPT-style Plus Button Handlers
+    const handlePlusButtonClick = () => {
+        setShowPlusOverlay(!showPlusOverlay);
+        setShowGoogleDriveOptions(false);
+    };
+
+    const handleFileUploadFromOverlay = () => {
+        setShowPlusOverlay(false);
+        triggerFileUpload();
+    };
+
+    const handleGoogleDriveClick = () => {
+        setShowGoogleDriveOptions(!showGoogleDriveOptions);
+    };
+
+    const handleGoogleDocsConnect = () => {
+        setShowPlusOverlay(false);
+        setShowGoogleDriveOptions(false);
+        setShowAddGoogleLinkModal(true);
+    };
+
+    // Phase 4: User Confirmation Modal Handlers
+    const showConfirmation = (action, title, message, content = '') => {
+        console.log('🔔 showConfirmation called:', { title, message, content: content.substring(0, 100) + '...' });
+        setPendingAction(action);
+        setConfirmationTitle(title);
+        setConfirmationMessage(message);
+        setPreviewContent(content);
+        setEditedPreviewContent(content);
+        setIsEditingPreview(false);
+        setShowConfirmationModal(true);
+    };
+
+    const handleConfirmAction = async () => {
+        if (!pendingAction) return;
+
+        try {
+            // Use edited content if user made changes
+            const finalContent = isEditingPreview ? editedPreviewContent : previewContent;
+            
+            // Execute the pending action with the final content
+            await pendingAction.execute(finalContent);
+            
+            // Close modal and reset state
+            setShowConfirmationModal(false);
+            setPendingAction(null);
+            setPreviewContent('');
+            setEditedPreviewContent('');
+            setIsEditingPreview(false);
+            
+        } catch (error) {
+            console.error('Error executing confirmed action:', error);
+            setSaveStatus('Error executing action: ' + error.message);
+        }
+    };
+
+    const handleRejectAction = () => {
+        setShowConfirmationModal(false);
+        setPendingAction(null);
+        setPreviewContent('');
+        setEditedPreviewContent('');
+        setIsEditingPreview(false);
+        setSaveStatus('Action cancelled by user');
+    };
+
+    const handleEditPreview = () => {
+        setIsEditingPreview(true);
+    };
+
+    const handleSavePreviewEdit = () => {
+        setPreviewContent(editedPreviewContent);
+        setIsEditingPreview(false);
+    };
+
+    const handleCancelPreviewEdit = () => {
+        setEditedPreviewContent(previewContent);
+        setIsEditingPreview(false);
+    };
+
+    // Phase 4: Confirmation-wrapped LLM Functions
+    const createNewDocumentWithConfirmation = useCallback(async (title, htmlContent, tags = []) => {
+        console.log('📝 createNewDocumentWithConfirmation called:', { title, htmlContent: htmlContent.substring(0, 100) + '...', tags });
+        
+        const action = {
+            execute: async (finalContent) => {
+                return await createNewDocument(title, finalContent, tags);
+            }
+        };
+
+        showConfirmation(
+            action,
+            'Create New Document',
+            `AI wants to create a new document titled "${title}". Please review the content below:`,
+            htmlContent
+        );
+
+        return { success: true, message: "Awaiting user confirmation..." };
+    }, [createNewDocument]);
+
+    const appendContentToDocumentWithConfirmation = useCallback(async (htmlContentToAppend, documentId = null) => {
+        const targetDocId = documentId || currentDocumentId;
+        const targetDoc = documents.find(doc => doc.id === targetDocId);
+        const docTitle = targetDoc ? targetDoc.title : 'Current Document';
+
+        const action = {
+            execute: async (finalContent) => {
+                return await appendContentToDocument(finalContent, documentId);
+            }
+        };
+
+        showConfirmation(
+            action,
+            'Append Content',
+            `AI wants to add content to "${docTitle}". Please review the content to be added:`,
+            htmlContentToAppend
+        );
+
+        return { success: true, message: "Awaiting user confirmation..." };
+    }, [appendContentToDocument, currentDocumentId, documents]);
+
     const handleDeleteFile = async (fileId) => {
         if (!window.confirm('Are you sure you want to delete this file?')) return;
 
@@ -2833,59 +2966,69 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 // Combine documents, files, and Google links
                 const allContent = [documentsText, uploadedFilesText, googleLinksText].filter(text => text.trim()).join('\n\n===== UPLOADED FILES =====\n\n');
 
-                const contextualQuestion = `You are a helpful AI assistant analyzing a user's personal notes, documents, and uploaded files. Please provide accurate, helpful responses based on the content provided.
+                const contextualQuestion = `You are a helpful AI assistant with access to document creation tools and the user's personal knowledge base. You can create documents, add content, and provide information from both your training data and the user's files.
 
 USER QUESTION: ${question}
 
-COMPLETE KNOWLEDGE BASE:
+USER'S KNOWLEDGE BASE:
 ${allContent}
 
 Instructions:
-- Answer based on the documents, uploaded files, and Google Links provided above
-- You have access to notes/documents, uploaded file contents, and some Google Docs content
-- For Google Links: Some may have extracted content (public docs), others may not (private/restricted docs)
-- If a Google Doc's content is not available, explain that the document may not be publicly accessible
-- Suggest making Google Docs public or copying/pasting content for analysis when content is not accessible
-- If the answer isn't in the provided content, clearly state that
-- Be specific and reference relevant document titles and file names when helpful
-- Cross-reference information between documents and uploaded files when relevant
-- Provide a clear, well-structured response
-- Also suggest 3-5 concise search terms for finding additional information online
+1. **ALWAYS use function calls for document operations** - Never just describe what you'll do, actually do it
+2. **For document creation requests**: IMMEDIATELY call createNewDocument function with comprehensive HTML content
+3. **For content addition requests**: IMMEDIATELY call appendContentToDocument function
+4. **For information requests about topics**: CREATE a document about the topic using createNewDocument
+5. **For research topics**: CREATE comprehensive documents with your knowledge using createNewDocument
+6. **Be proactive**: When users ask about ANY topic, create a document about it
+7. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags
 
-IMPORTANT: Return your response as a JSON object with exactly this structure:
-{
-  "answer": "Your comprehensive answer here",
-  "search_terms": ["search term 1", "search term 2", "search term 3"]
-}`;
+CRITICAL: When a user asks to "create a document about X" or asks about any topic, you MUST call the createNewDocument function. Do not just say you will create it - actually call the function.
+
+CAPABILITIES:
+- I MUST use createNewDocument function for any document creation
+- I MUST use appendContentToDocument function for adding content
+- I can search through uploaded files with searchFileContent
+- I provide comprehensive information using my training data
+- I suggest search terms for additional research
+
+RESPONSE FORMAT: 
+- For document creation: Call createNewDocument function with comprehensive HTML content
+- For content addition: Call appendContentToDocument function with HTML content
+- For information only: Provide a helpful response and suggest search terms for additional research`;
 
                 // Include recent chat history (last 8 messages to manage token usage)
                 const recentHistory = newChatHistory.slice(-1);
                 recentHistory[0] = { role: "user", parts: [{ text: contextualQuestion }] };
                 payload = { 
-                    contents: recentHistory,
-                    generationConfig: {
-                        responseMimeType: "application/json",
-                        responseSchema: {
-                            type: "OBJECT",
-                            properties: {
-                                answer: {
-                                    type: "STRING"
-                                },
-                                search_terms: {
-                                    type: "ARRAY",
-                                    items: {
-                                        type: "STRING"
-                                    }
-                                }
-                            },
-                            required: ["answer", "search_terms"]
-                        }
-                    }
+                    contents: recentHistory
+                    // Removed JSON schema to allow function calling
                 };
             } else {
-                // Continuing conversation - use recent history without re-adding document context
+                // Continuing conversation - use recent history with system context
                 const recentHistory = newChatHistory.slice(-8); // Last 8 messages
-                payload = { contents: recentHistory };
+                
+                // Add system context for continuing conversations
+                const systemMessage = {
+                    role: "user",
+                    parts: [{
+                        text: `You are a helpful AI assistant with document creation capabilities. 
+
+CRITICAL INSTRUCTIONS:
+- When users ask to "create a document" or ask about any topic, you MUST call the createNewDocument function
+- When users ask to add content, you MUST call the appendContentToDocument function
+- Never just say you will create something - actually call the function
+- Use comprehensive HTML content with proper formatting
+
+AVAILABLE FUNCTIONS:
+- createNewDocument: MUST use for any document creation requests
+- appendContentToDocument: MUST use for adding content to documents
+- searchFileContent: Use to search uploaded files
+
+Be proactive and actually CREATE documents when users ask about topics, don't just describe what you would create.`
+                    }]
+                };
+                
+                payload = { contents: [systemMessage, ...recentHistory] };
             }
         }
 
@@ -2894,7 +3037,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
             function_declarations: [
                 {
                     name: "createNewDocument",
-                    description: "Create a new document with HTML content. Use this when the user asks to create a new document, note, or page.",
+                    description: "Create a new document with HTML content. Use this when the user asks to create a document, wants information about a topic (create a research document), or when you want to provide comprehensive information that would be useful as a saved document.",
                     parameters: {
                         type: "OBJECT",
                         properties: {
@@ -2917,7 +3060,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 },
                 {
                     name: "appendContentToDocument", 
-                    description: "Append HTML content to the current document or a specific document. Use this when the user asks to add content to an existing document.",
+                    description: "Append HTML content to the current document or a specific document. Use this when the user asks to add content to an existing document, or when you want to add related information to an existing document.",
                     parameters: {
                         type: "OBJECT",
                         properties: {
@@ -3013,25 +3156,25 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                             
                             let result;
                             if (functionName === 'createNewDocument') {
-                                result = await createNewDocument(
+                                result = await createNewDocumentWithConfirmation(
                                     functionArgs.title,
                                     functionArgs.htmlContent,
                                     functionArgs.tags
                                 );
                                 if (result.success) {
-                                    responseText += `✅ Created new document: "${functionArgs.title}". `;
+                                    responseText += `📋 Document creation pending your approval. Please review and confirm the content. `;
                                 } else {
-                                    responseText += `❌ Failed to create document: ${result.error}. `;
+                                    responseText += `❌ Failed to prepare document: ${result.error}. `;
                                 }
                             } else if (functionName === 'appendContentToDocument') {
-                                result = await appendContentToDocument(
+                                result = await appendContentToDocumentWithConfirmation(
                                     functionArgs.htmlContentToAppend,
                                     functionArgs.documentId
                                 );
                                 if (result.success) {
-                                    responseText += `✅ Added content to document. `;
+                                    responseText += `📋 Content addition pending your approval. Please review and confirm the content. `;
                                 } else {
-                                    responseText += `❌ Failed to add content: ${result.error}. `;
+                                    responseText += `❌ Failed to prepare content: ${result.error}. `;
                                 }
                             } else if (functionName === 'uploadAndAnalyzeFile') {
                                 responseText += `📁 File upload functionality requires user interaction. Please use the file upload button in the interface. `;
@@ -3068,6 +3211,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 } else {
                     // Regular text response (not a function call)
                     const aiResponseText = parts[0].text;
+                    console.log('📝 AI text response (no function call):', aiResponseText);
                     
                     try {
                         // Try to parse as structured JSON response
@@ -3584,12 +3728,17 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
             if (openOverflowMenu && !event.target.closest('.overflow-menu')) {
                 setOpenOverflowMenu(null);
             }
+            // Close plus overlay when clicking outside
+            if (showPlusOverlay && !event.target.closest('.plus-overlay-container')) {
+                setShowPlusOverlay(false);
+                setShowGoogleDriveOptions(false);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showSelectedTextMenu, openOverflowMenu]);
+    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay]);
 
 
 
@@ -4577,20 +4726,163 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     </div>
                 )}
 
-                <input
-                    type="text"
-                    className={`w-full p-2.5 rounded-md border focus:outline-none focus:ring-1 focus:ring-blue-400 mb-3 text-sm placeholder-gray-400
-                        ${isDarkMode ? 'bg-gray-700 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
-                    placeholder="Ask AI about your documents or request new content..."
-                    value={llmQuestion}
-                    onChange={(e) => setLlmQuestion(e.target.value)}
-                    onKeyPress={(e) => {
-                        if (e.key === 'Enter') {
-                            askLlm();
-                        }
-                    }}
-                    disabled={llmLoading || documents.length === 0}
-                />
+                {/* Chat Input with Plus Button */}
+                <div className="relative mb-3 plus-overlay-container">
+                    {/* Plus Button */}
+                    <button
+                        onClick={handlePlusButtonClick}
+                        className={`absolute left-2 top-1/2 transform -translate-y-1/2 z-10 w-6 h-6 rounded-full flex items-center justify-center transition-colors duration-200
+                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-600'}
+                        `}
+                        title="Add files or connect apps"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
+                        </svg>
+                    </button>
+
+                    {/* Input Field */}
+                    <input
+                        type="text"
+                        className={`w-full pl-10 pr-3 py-2.5 rounded-md border focus:outline-none focus:ring-1 focus:ring-blue-400 text-sm placeholder-gray-400
+                            ${isDarkMode ? 'bg-gray-700 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
+                        placeholder="Ask AI about your documents or request new content..."
+                        value={llmQuestion}
+                        onChange={(e) => setLlmQuestion(e.target.value)}
+                        onKeyPress={(e) => {
+                            if (e.key === 'Enter') {
+                                askLlm();
+                            }
+                        }}
+                        disabled={llmLoading || documents.length === 0}
+                    />
+
+                    {/* Plus Button Overlay */}
+                    {showPlusOverlay && (
+                        <div className={`absolute left-0 bottom-full mb-2 w-64 rounded-lg shadow-lg border z-50
+                            ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}
+                        `}>
+                            <div className="p-3">
+                                <h3 className={`text-sm font-medium mb-3 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                                    Add Content
+                                </h3>
+                                
+                                {/* File Upload Option */}
+                                <button
+                                    onClick={handleFileUploadFromOverlay}
+                                    className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
+                                        ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                    `}
+                                >
+                                    <div className={`w-8 h-8 rounded-md flex items-center justify-center mr-3
+                                        ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}
+                                    `}>
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <div className="text-sm font-medium">Add photos and files</div>
+                                        <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                            Upload documents, images, and more
+                                        </div>
+                                    </div>
+                                </button>
+
+                                {/* Google Drive Option */}
+                                <button
+                                    onClick={handleGoogleDriveClick}
+                                    className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
+                                        ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                    `}
+                                >
+                                    <div className={`w-8 h-8 rounded-md flex items-center justify-center mr-3
+                                        ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}
+                                    `}>
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                                        </svg>
+                                    </div>
+                                    <div className="flex items-center justify-between flex-1">
+                                        <div>
+                                            <div className="text-sm font-medium">Add from apps</div>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                Connect Google Drive, OneDrive
+                                            </div>
+                                        </div>
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>
+                                        </svg>
+                                    </div>
+                                </button>
+
+                                {/* Google Drive Sub-options */}
+                                {showGoogleDriveOptions && (
+                                    <div className={`mt-2 ml-4 pl-4 border-l-2 space-y-1
+                                        ${isDarkMode ? 'border-gray-600' : 'border-gray-200'}
+                                    `}>
+                                        <button
+                                            onClick={handleGoogleDocsConnect}
+                                            className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
+                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                            `}
+                                        >
+                                            <div className="w-6 h-6 rounded-md bg-blue-500 flex items-center justify-center mr-3">
+                                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                                                </svg>
+                                            </div>
+                                            <div>
+                                                <div className="text-sm font-medium">Google Drive</div>
+                                                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                    Connect Google Docs
+                                                </div>
+                                            </div>
+                                        </button>
+                                        
+                                        <button
+                                            onClick={handleGoogleDocsConnect}
+                                            className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
+                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                            `}
+                                        >
+                                            <div className="w-6 h-6 rounded-md bg-blue-600 flex items-center justify-center mr-3">
+                                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                                                </svg>
+                                            </div>
+                                            <div>
+                                                <div className="text-sm font-medium">Connect Microsoft OneDrive</div>
+                                                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                    Personal
+                                                </div>
+                                            </div>
+                                        </button>
+
+                                        <button
+                                            onClick={handleGoogleDocsConnect}
+                                            className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
+                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                            `}
+                                        >
+                                            <div className="w-6 h-6 rounded-md bg-blue-700 flex items-center justify-center mr-3">
+                                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
+                                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
+                                                </svg>
+                                            </div>
+                                            <div>
+                                                <div className="text-sm font-medium">Connect Microsoft OneDrive</div>
+                                                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                    Work/School - Includes SharePoint
+                                                </div>
+                                            </div>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
                 <button
                     onClick={() => askLlm()}
                     className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
@@ -4852,6 +5144,104 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 style={{ display: 'none' }}
                 accept="*/*"
             />
+
+            {/* Phase 4: User Confirmation Modal */}
+            {showConfirmationModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className={`rounded-lg p-6 w-full max-w-2xl mx-4 max-h-[80vh] overflow-y-auto ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                                {confirmationTitle}
+                            </h3>
+                            <button
+                                onClick={handleRejectAction}
+                                className={`p-1 rounded-md transition-colors ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}`}
+                            >
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+                        
+                        <p className={`text-sm mb-4 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                            {confirmationMessage}
+                        </p>
+                        
+                        {/* Content Preview */}
+                        <div className="mb-6">
+                            <div className="flex items-center justify-between mb-2">
+                                <label className={`text-sm font-medium ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                    Content Preview:
+                                </label>
+                                {!isEditingPreview && (
+                                    <button
+                                        onClick={handleEditPreview}
+                                        className={`text-xs px-2 py-1 rounded transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+                                    >
+                                        Edit
+                                    </button>
+                                )}
+                            </div>
+                            
+                            {isEditingPreview ? (
+                                <div>
+                                    <textarea
+                                        value={editedPreviewContent}
+                                        onChange={(e) => setEditedPreviewContent(e.target.value)}
+                                        className={`w-full h-40 px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm
+                                            ${isDarkMode 
+                                                ? 'bg-gray-700 border-gray-600 text-gray-100' 
+                                                : 'bg-white border-gray-300 text-gray-900'
+                                            }
+                                        `}
+                                        placeholder="Edit the content here..."
+                                    />
+                                    <div className="flex justify-end gap-2 mt-2">
+                                        <button
+                                            onClick={handleCancelPreviewEdit}
+                                            className={`text-xs px-3 py-1 rounded transition-colors ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            onClick={handleSavePreviewEdit}
+                                            className="text-xs px-3 py-1 rounded transition-colors bg-blue-600 hover:bg-blue-700 text-white"
+                                        >
+                                            Save Changes
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div 
+                                    className={`border rounded-md p-3 max-h-60 overflow-y-auto ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-300'}`}
+                                    dangerouslySetInnerHTML={{ __html: previewContent }}
+                                />
+                            )}
+                        </div>
+                        
+                        {/* Action Buttons */}
+                        <div className="flex justify-end gap-3">
+                            <button
+                                onClick={handleRejectAction}
+                                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors
+                                    ${isDarkMode 
+                                        ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' 
+                                        : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                    }
+                                `}
+                            >
+                                ❌ Reject
+                            </button>
+                            <button
+                                onClick={handleConfirmAction}
+                                className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white"
+                            >
+                                ✅ Approve & Execute
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Google Link Modal */}
             {showAddGoogleLinkModal && (
