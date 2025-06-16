@@ -1040,6 +1040,120 @@ const App = () => {
         }
     }, []);
 
+    // Helper function to convert HTML to Editor.js JSON format
+    const convertHtmlToEditorJs = useCallback((htmlContent) => {
+        if (!htmlContent) {
+            return { blocks: [] };
+        }
+        
+        // If it's already Editor.js JSON, return as is
+        if (typeof htmlContent === 'string' && htmlContent.startsWith('{')) {
+            try {
+                return JSON.parse(htmlContent);
+            } catch (e) {
+                // Fall through to HTML parsing
+            }
+        }
+        
+        // Simple HTML to Editor.js conversion
+        // This is a basic implementation - for production you might want a more robust parser
+        const blocks = [];
+        
+        // Create a temporary div to parse HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = htmlContent;
+        
+        // Convert each child element to an Editor.js block
+        Array.from(tempDiv.children).forEach(element => {
+            const tagName = element.tagName.toLowerCase();
+            
+            switch (tagName) {
+                case 'h1':
+                case 'h2':
+                case 'h3':
+                case 'h4':
+                case 'h5':
+                case 'h6':
+                    blocks.push({
+                        type: 'header',
+                        data: {
+                            text: element.textContent || '',
+                            level: parseInt(tagName.charAt(1))
+                        }
+                    });
+                    break;
+                case 'p':
+                    if (element.textContent?.trim()) {
+                        blocks.push({
+                            type: 'paragraph',
+                            data: {
+                                text: element.innerHTML || ''
+                            }
+                        });
+                    }
+                    break;
+                case 'ul':
+                case 'ol':
+                    const items = Array.from(element.children).map(li => li.textContent || '');
+                    if (items.length > 0) {
+                        blocks.push({
+                            type: 'list',
+                            data: {
+                                style: tagName === 'ol' ? 'ordered' : 'unordered',
+                                items: items
+                            }
+                        });
+                    }
+                    break;
+                case 'blockquote':
+                    blocks.push({
+                        type: 'quote',
+                        data: {
+                            text: element.textContent || ''
+                        }
+                    });
+                    break;
+                case 'pre':
+                    blocks.push({
+                        type: 'code',
+                        data: {
+                            code: element.textContent || ''
+                        }
+                    });
+                    break;
+                case 'hr':
+                    blocks.push({
+                        type: 'delimiter',
+                        data: {}
+                    });
+                    break;
+                default:
+                    // For any other elements, treat as paragraph
+                    if (element.textContent?.trim()) {
+                        blocks.push({
+                            type: 'paragraph',
+                            data: {
+                                text: element.innerHTML || ''
+                            }
+                        });
+                    }
+                    break;
+            }
+        });
+        
+        // If no blocks were created, create a default paragraph
+        if (blocks.length === 0 && htmlContent.trim()) {
+            blocks.push({
+                type: 'paragraph',
+                data: {
+                    text: htmlContent
+                }
+            });
+        }
+        
+        return { blocks };
+    }, []);
+
     // LLM Function Calling - Phase 1: Core HTML Content Functions
     const createNewDocument = useCallback(async (title, htmlContent, tags = []) => {
         if (!db || !userId || !appId) {
