@@ -3817,63 +3817,21 @@ Return only the expanded text without any additional commentary.`;
             // Create the link text
             const linkText = `[[${childTitle}]]`;
             
-            // Convert current content to plain text to check if link already exists
-            let plainTextContent = '';
-            try {
-                if (parentContent) {
-                    const parsed = JSON.parse(parentContent);
-                    if (parsed.blocks) {
-                        plainTextContent = convertEditorToPlainText(parsed);
-                    } else {
-                        plainTextContent = convertHtmlToPlainText(parentContent);
-                    }
-                }
-            } catch (e) {
-                plainTextContent = convertHtmlToPlainText(parentContent);
-            }
-            
-            // Check if link already exists
-            if (plainTextContent.includes(linkText)) {
+            // Check if link already exists in the content
+            if (parentContent.includes(linkText)) {
                 console.log("Link already exists in parent document");
                 return;
             }
             
-            // Add the link to the parent document
+            // Add the link to the parent document content (simple HTML format for rich text editor)
             let updatedContent = '';
             
-            try {
-                // Try to parse as Editor.js format
-                const parsed = JSON.parse(parentContent);
-                if (parsed.blocks) {
-                    // Add a new paragraph block with the link
-                    const newBlock = {
-                        type: "paragraph",
-                        data: {
-                            text: `<p>${linkText}</p>`
-                        }
-                    };
-                    
-                    parsed.blocks.push(newBlock);
-                    updatedContent = JSON.stringify(parsed);
-                } else {
-                    // Fallback: treat as HTML and append
-                    updatedContent = parentContent + `<p>${linkText}</p>`;
-                }
-            } catch (e) {
-                // Fallback: treat as HTML and append
-                if (parentContent.trim()) {
-                    updatedContent = parentContent + `<p>${linkText}</p>`;
-                } else {
-                    // Empty document, create basic structure
-                    updatedContent = JSON.stringify({
-                        blocks: [{
-                            type: "paragraph",
-                            data: {
-                                text: `<p>${linkText}</p>`
-                            }
-                        }]
-                    });
-                }
+            if (parentContent.trim()) {
+                // Append to existing content
+                updatedContent = parentContent + `<p><a href="#" data-document-id="${childId}" class="internal-link">${linkText}</a></p>`;
+            } else {
+                // Empty document, create basic structure
+                updatedContent = `<p><a href="#" data-document-id="${childId}" class="internal-link">${linkText}</a></p>`;
             }
             
             // Update the parent document
@@ -3894,6 +3852,49 @@ Return only the expanded text without any additional commentary.`;
             
         } catch (error) {
             console.error("Error adding child link to parent:", error);
+        }
+    };
+
+    // Function to fix existing parent-child relationships
+    const fixExistingParentChildLinks = async () => {
+        if (!db || !userId || !appId) {
+            console.error("Database not ready for fixing parent-child links");
+            return;
+        }
+
+        try {
+            console.log("Fixing existing parent-child relationships...");
+            
+            // Get all documents
+            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
+            const snapshot = await getDocs(notesRef);
+            const allDocs = [];
+            
+            snapshot.forEach(doc => {
+                allDocs.push({ id: doc.id, ...doc.data() });
+            });
+            
+            // Find all child documents that have parents
+            const childDocs = allDocs.filter(doc => doc.parentId);
+            
+            // For each child, ensure the parent has a link to it
+            for (const childDoc of childDocs) {
+                const parentDoc = allDocs.find(doc => doc.id === childDoc.parentId);
+                if (parentDoc) {
+                    const linkText = `[[${childDoc.title || 'Untitled'}]]`;
+                    
+                    // Check if parent already has this link
+                    if (!parentDoc.content || !parentDoc.content.includes(linkText)) {
+                        console.log(`Adding missing link for "${childDoc.title}" to parent "${parentDoc.title}"`);
+                        await addChildLinkToParent(parentDoc.id, childDoc.id, childDoc.title || 'Untitled');
+                    }
+                }
+            }
+            
+            console.log("Finished fixing parent-child relationships");
+            
+        } catch (error) {
+            console.error("Error fixing parent-child relationships:", error);
         }
     };
 
@@ -6343,6 +6344,29 @@ Answer conversational questions directly in the chat. Only create documents when
                                     Add Content & AI Actions
                                 </h3>
                                 
+                                {/* Fix Parent-Child Links */}
+                                <button
+                                    onClick={() => {
+                                        fixExistingParentChildLinks();
+                                        setShowPlusOverlay(false);
+                                    }}
+                                    className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
+                                        ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                    `}
+                                >
+                                    <div className="w-6 h-6 rounded-md bg-blue-500 flex items-center justify-center mr-3">
+                                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.102m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                                        </svg>
+                                    </div>
+                                    <div>
+                                        <div className="text-sm font-medium">Fix Page Links</div>
+                                        <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                            Add missing child page links to parents
+                                        </div>
+                                    </div>
+                                </button>
+
                                 {/* AI Title & Icon Suggestions */}
                                 {currentDocumentId && (
                                     <button
