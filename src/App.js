@@ -548,6 +548,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         toolbar, 
         editor, 
         isInitialized: true,
+        handleChange: handleChange, // Expose the handleChange function
         updateContent: (newContent) => {
             if (editor) {
                 // Save current cursor position
@@ -882,6 +883,58 @@ const App = () => {
         }).filter(text => text.trim()).join('\n\n');
     }, []);
 
+    // Helper function to convert Editor.js JSON to HTML for rich text editor
+    const convertEditorJsonToHtml = useCallback((content) => {
+        if (!content) return '';
+        
+        // If it's already HTML, return as is
+        if (typeof content === 'string' && !content.startsWith('{')) {
+            return content;
+        }
+        
+        // Try to parse as Editor.js JSON
+        try {
+            const editorData = typeof content === 'string' ? JSON.parse(content) : content;
+            
+            if (!editorData.blocks || editorData.blocks.length === 0) {
+                return '<p>Start writing...</p>';
+            }
+            
+            return editorData.blocks.map(block => {
+                switch (block.type) {
+                    case 'header':
+                        const level = block.data.level || 2;
+                        return `<h${level}>${block.data.text || ''}</h${level}>`;
+                    case 'paragraph':
+                        return `<p>${block.data.text || ''}</p>`;
+                    case 'list':
+                        const listType = block.data.style === 'ordered' ? 'ol' : 'ul';
+                        const items = (block.data.items || []).map(item => {
+                            const itemText = typeof item === 'string' ? item : (item.content || item.text || '');
+                            return `<li>${itemText}</li>`;
+                        }).join('');
+                        return `<${listType}>${items}</${listType}>`;
+                    case 'quote':
+                        return `<blockquote>${block.data.text || ''}</blockquote>`;
+                    case 'code':
+                        return `<pre style="background: #f4f4f4; padding: 12px; border-radius: 4px; font-family: monospace;"><code>${block.data.code || ''}</code></pre>`;
+                    case 'checklist':
+                        return (block.data.items || []).map(item => 
+                            `<p><input type="checkbox" ${item.checked ? 'checked' : ''} disabled> ${item.text || ''}</p>`
+                        ).join('');
+                    case 'delimiter':
+                        return '<hr>';
+                    default:
+                        return `<p>${JSON.stringify(block.data)}</p>`;
+                }
+            }).join('');
+            
+        } catch (error) {
+            console.log('Content is not valid Editor.js JSON, treating as plain text');
+            return `<p>${content}</p>`;
+        }
+    }, []);
+
     // Phase 2: File Content Extraction
     const extractFileContent = useCallback(async (file, downloadURL) => {
         const fileType = file.type.toLowerCase();
@@ -1145,6 +1198,51 @@ const App = () => {
     // File Management Refs
     const fileInputRef = useRef(null); // Reference to the hidden file input
 
+    // Simple, reliable editor state
+    const [editorReady, setEditorReady] = useState(false);
+
+    // Initialize simple rich text editor immediately
+    useEffect(() => {
+        if (!isAuthReady || !editorElementRef.current || editorReady) return;
+
+        try {
+            console.log("🚀 Initializing reliable rich text editor...");
+            
+            // Clear any existing content
+            editorElementRef.current.innerHTML = '';
+            
+            // Convert Editor.js JSON to HTML for rich text editor
+            const htmlContent = convertEditorJsonToHtml(currentDocumentContent);
+            console.log("📝 Converted content for rich text editor:", htmlContent.substring(0, 100) + '...');
+            
+            // Initialize the simple rich text editor with converted content
+            window.setCurrentDocumentContent = setCurrentDocumentContent;
+            createSimpleRichEditor(editorElementRef.current, htmlContent, setCurrentDocumentContent);
+            
+            setEditorReady(true);
+            console.log("✅ Rich text editor ready!");
+            
+        } catch (error) {
+            console.error("❌ Editor initialization failed:", error);
+        }
+    }, [isAuthReady, convertEditorJsonToHtml]);
+
+    // Update editor content when document changes
+    useEffect(() => {
+        if (!editorReady || !editorElementRef.current?._richEditor) return;
+
+        const richEditor = editorElementRef.current._richEditor;
+        if (richEditor && richEditor.updateContent) {
+            const currentEditorContent = richEditor.editor?.innerHTML || '';
+            const htmlContent = convertEditorJsonToHtml(currentDocumentContent);
+            
+            if (currentEditorContent !== htmlContent) {
+                richEditor.updateContent(htmlContent);
+                console.log("📝 Editor content updated with converted HTML");
+            }
+        }
+    }, [currentDocumentId, currentDocumentContent, editorReady, convertEditorJsonToHtml]);
+
     // Load Editor.js dynamically
     useEffect(() => {
         // Load Editor.js CSS with fallback
@@ -1162,125 +1260,8 @@ const App = () => {
             document.head.appendChild(editorCSS);
         }
 
-        // Load Editor.js and plugins with specific versions
-        const loadScript = (src, globalName) => {
-            return new Promise((resolve, reject) => {
-                // Check if already loaded by looking for the global object
-                if (globalName && window[globalName]) {
-                    resolve();
-                    return;
-                }
-                
-                // Check if script tag already exists
-                if (document.querySelector(`script[src="${src}"]`)) {
-                    // Wait a bit for the script to execute
-                    setTimeout(() => {
-                        if (globalName && window[globalName]) {
-                            resolve();
-                        } else {
-                            reject(new Error(`${globalName} not found after loading`));
-                        }
-                    }, 100);
-                    return;
-                }
-                
-                const script = document.createElement('script');
-                script.src = src;
-                script.async = true;
-                script.onload = () => {
-                    // Give the script time to execute and create global variables
-                    setTimeout(() => {
-                        if (!globalName || window[globalName]) {
-                            resolve();
-                        } else {
-                            reject(new Error(`${globalName} not found after loading ${src}`));
-                        }
-                    }, 50);
-                };
-                script.onerror = () => reject(new Error(`Failed to load ${src}`));
-                document.head.appendChild(script);
-            });
-        };
-
-        const loadEditorJS = async () => {
-            try {
-                console.log("Starting to load Editor.js...");
-                
-                // Load Editor.js core with specific version - using unpkg as fallback
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/editorjs@2.28.2/dist/editor.js', 'EditorJS');
-                } catch (e) {
-                    console.log("jsdelivr failed, trying unpkg...");
-                    await loadScript('https://unpkg.com/@editorjs/editorjs@2.28.2/dist/editor.js', 'EditorJS');
-                }
-                console.log("Editor.js core loaded");
-                
-                // Load plugins with specific versions
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/header@2.7.0/dist/bundle.js', 'Header');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/header@2.7.0/dist/bundle.js', 'Header');
-                }
-                console.log("Header plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/list@1.8.0/dist/bundle.js', 'List');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/list@1.8.0/dist/bundle.js', 'List');
-                }
-                console.log("List plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/checklist@1.5.0/dist/bundle.js', 'Checklist');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/checklist@1.5.0/dist/bundle.js', 'Checklist');
-                }
-                console.log("Checklist plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/quote@2.5.0/dist/bundle.js', 'Quote');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/quote@2.5.0/dist/bundle.js', 'Quote');
-                }
-                console.log("Quote plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/code@2.8.0/dist/bundle.js', 'CodeTool');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/code@2.8.0/dist/bundle.js', 'CodeTool');
-                }
-                console.log("Code plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/delimiter@1.3.0/dist/bundle.js', 'Delimiter');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/delimiter@1.3.0/dist/bundle.js', 'Delimiter');
-                }
-                console.log("Delimiter plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/marker@1.3.0/dist/bundle.js', 'Marker');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/marker@1.3.0/dist/bundle.js', 'Marker');
-                }
-                console.log("Marker plugin loaded");
-                
-                try {
-                    await loadScript('https://cdn.jsdelivr.net/npm/@editorjs/inline-code@1.4.0/dist/bundle.js', 'InlineCode');
-                } catch (e) {
-                    await loadScript('https://unpkg.com/@editorjs/inline-code@1.4.0/dist/bundle.js', 'InlineCode');
-                }
-                console.log("InlineCode plugin loaded");
-                
-                console.log("All Editor.js plugins loaded successfully");
-            } catch (error) {
-                console.error("Failed to load Editor.js:", error);
-                // Set a flag to use fallback textarea
-                window.editorJSLoadFailed = true;
-            }
-        };
-
-        loadEditorJS();
+        // Editor.js loading removed - using reliable fallback editor only
+        console.log("📝 Using reliable rich text editor (no CDN dependencies)");
     }, []);
 
     // Firebase Initialization and Authentication
@@ -1521,149 +1502,7 @@ const App = () => {
         }
     }, [db, userId, currentDocumentId, isAuthReady, appId]);
 
-    // Initialize Editor.js with proper loading handling
-    useEffect(() => {
-        const initializeEditor = () => {
-            if (editorElementRef.current && !editorRef.current && window.EditorJS) {
-                try {
-                    console.log("Initializing Editor.js...");
-                    
-                    // Parse existing content
-                    let initialData = { blocks: [] };
-                    if (currentDocumentContent) {
-                        console.log('Converting content for editor:', currentDocumentContent.substring(0, 100) + '...');
-                        initialData = convertToEditorFormat(currentDocumentContent);
-                        console.log('Converted to editor format:', initialData);
-                    }
-
-                    // Create Editor.js instance with basic tools first
-                    const tools = {};
-                    
-                    // Only add tools that are actually loaded
-                    if (window.Header) tools.header = { class: window.Header, inlineToolbar: true };
-                    if (window.List) tools.list = { class: window.List, inlineToolbar: true };
-                    if (window.Checklist) tools.checklist = { class: window.Checklist, inlineToolbar: true };
-                    if (window.Quote) tools.quote = { class: window.Quote, inlineToolbar: true };
-                    if (window.CodeTool) tools.code = { class: window.CodeTool };
-                    if (window.Delimiter) tools.delimiter = window.Delimiter;
-                    if (window.Marker) tools.marker = { class: window.Marker, shortcut: 'CMD+SHIFT+M' };
-                    if (window.InlineCode) tools.inlineCode = { class: window.InlineCode, shortcut: 'CMD+SHIFT+C' };
-
-                    const editor = new window.EditorJS({
-                        holder: editorElementRef.current,
-                        placeholder: 'Type \'/\' for commands or start writing...',
-                        data: initialData,
-                        tools: tools,
-                        onChange: async () => {
-                            if (!editorRef.current) return;
-                            
-                            // Debounce the onChange to prevent saving after every keystroke
-                            if (window.editorChangeTimeout) {
-                                clearTimeout(window.editorChangeTimeout);
-                            }
-                            
-                            window.editorChangeTimeout = setTimeout(async () => {
-                                try {
-                                    const savedData = await editorRef.current.save();
-                                    const jsonContent = JSON.stringify(savedData);
-                                    
-                                    // Update the document content
-                                    setCurrentDocumentContent(jsonContent);
-                                    console.log("Editor.js content updated");
-                                } catch (error) {
-                                    console.error('Error saving editor content:', error);
-                                }
-                            }, 500); // Wait 500ms after user stops typing
-                        }
-                    });
-
-                    // Save editor reference
-                    editorRef.current = editor;
-
-                    console.log("Editor.js initialized successfully - text selection listeners managed separately");
-
-                    console.log("Editor.js initialized successfully");
-                } catch (error) {
-                    console.error("Failed to initialize Editor.js:", error);
-                    
-                    // Fallback to simple rich text editor
-                    if (editorElementRef.current && !editorElementRef.current._richEditor?.isInitialized) {
-                        window.setCurrentDocumentContent = setCurrentDocumentContent;
-                        createSimpleRichEditor(editorElementRef.current, currentDocumentContent || '', setCurrentDocumentContent);
-                    }
-                }
-            }
-        };
-
-        // Check if Editor.js is already loaded or failed to load
-        if (window.editorJSLoadFailed) {
-            console.log("Editor.js failed to load, using fallback textarea");
-            // Show simple rich text editor fallback
-            if (editorElementRef.current && !editorElementRef.current._richEditor?.isInitialized) {
-                // Make state setter available globally for the editor
-                window.setCurrentDocumentContent = setCurrentDocumentContent;
-                createSimpleRichEditor(editorElementRef.current, currentDocumentContent || '', setCurrentDocumentContent);
-            }
-        } else if (window.EditorJS && window.Header && window.List) {
-            initializeEditor();
-        } else {
-            // Show loading indicator while waiting for Editor.js
-            if (editorElementRef.current) {
-                editorElementRef.current.innerHTML = `
-                    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; color: #9ca3af;">
-                        <div style="margin-bottom: 12px;">Loading rich text editor...</div>
-                        <div style="display: flex; align-items: center;">
-                            <div style="width: 16px; height: 16px; border: 2px solid #e5e7eb; border-top: 2px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px;"></div>
-                            <span style="font-size: 14px;">Editor.js loading</span>
-                        </div>
-                    </div>
-                    <style>
-                        @keyframes spin {
-                            0% { transform: rotate(0deg); }
-                            100% { transform: rotate(360deg); }
-                        }
-                    </style>
-                `;
-            }
-            
-            // Wait for Editor.js to load
-            let attempts = 0;
-            const maxAttempts = 100; // 10 seconds
-            
-            const checkEditorLoaded = setInterval(() => {
-                attempts++;
-                
-                if (window.editorJSLoadFailed) {
-                    clearInterval(checkEditorLoaded);
-                    console.log("Editor.js failed to load, using fallback textarea");
-                    // Show simple rich text editor fallback
-                    if (editorElementRef.current && !editorElementRef.current._richEditor?.isInitialized) {
-                        window.setCurrentDocumentContent = setCurrentDocumentContent;
-                        createSimpleRichEditor(editorElementRef.current, currentDocumentContent || '', setCurrentDocumentContent);
-                    }
-                } else if (window.EditorJS && window.Header && window.List) {
-                    clearInterval(checkEditorLoaded);
-                    initializeEditor();
-                } else if (attempts >= maxAttempts) {
-                    clearInterval(checkEditorLoaded);
-                    console.log("Editor.js load timeout, using fallback textarea");
-                    // Show simple rich text editor fallback
-                    if (editorElementRef.current && !editorElementRef.current._richEditor?.isInitialized) {
-                        window.setCurrentDocumentContent = setCurrentDocumentContent;
-                        createSimpleRichEditor(editorElementRef.current, currentDocumentContent || '', setCurrentDocumentContent);
-                    }
-                }
-            }, 100);
-        }
-        
-        // Cleanup
-        return () => {
-            if (editorRef.current && editorRef.current.destroy) {
-                editorRef.current.destroy();
-                editorRef.current = null;
-            }
-        };
-    }, [isAuthReady]); // Removed handleTextSelection dependency
+    // Editor initialization removed - handled by simple useEffect above
 
     // Separate useEffect for text selection listeners
     useEffect(() => {
@@ -1687,53 +1526,7 @@ const App = () => {
         };
     }, [handleTextSelection]); // This useEffect depends on handleTextSelection
 
-    // Separate useEffect to update editor content when document changes
-    useEffect(() => {
-        const updateEditorContent = async () => {
-            if (!currentDocumentId) {
-                // Clear editor if no document selected
-                if (editorRef.current) {
-                    try {
-                        await editorRef.current.render({ blocks: [] });
-                        console.log("Editor.js cleared for no document");
-                    } catch (error) {
-                        console.error("Error clearing Editor.js:", error);
-                    }
-                } else if (editorElementRef.current?._richEditor) {
-                    // Clear rich text editor using the updateContent method
-                    editorElementRef.current._richEditor.updateContent('');
-                }
-                return;
-            }
-
-            // Update Editor.js content when document changes
-            if (editorRef.current) {
-                try {
-                    console.log('Updating editor with content:', currentDocumentContent?.substring(0, 100) + '...');
-                    const newData = convertToEditorFormat(currentDocumentContent || '');
-                    console.log('Converted data for editor:', newData);
-                    await editorRef.current.render(newData);
-                    console.log("Editor.js content updated successfully for document:", currentDocumentId);
-                } catch (error) {
-                    console.error("Failed to update Editor.js content:", error);
-                }
-                         } else if (editorElementRef.current?._richEditor) {
-                // Update rich text editor content using the updateContent method
-                // Only update if content has actually changed to prevent cursor jumping
-                const currentEditorContent = editorElementRef.current._richEditor.editor?.innerHTML || '';
-                const newContent = currentDocumentContent || '';
-                
-                if (currentEditorContent !== newContent) {
-                    editorElementRef.current._richEditor.updateContent(newContent);
-                    console.log("Rich text editor content updated for document:", currentDocumentId);
-                } else {
-                    console.log("Rich text editor content unchanged, skipping update");
-                }
-            }
-        };
-
-        updateEditorContent();
-    }, [currentDocumentId, currentDocumentContent, convertToEditorFormat]); // Added missing dependencies
+    // Content update logic removed - handled by simple useEffect above
 
     // Auto-scroll LLM response to bottom
     useEffect(() => {
@@ -3331,6 +3124,8 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
         };
     }, [showSelectedTextMenu, openOverflowMenu]);
 
+
+
     if (!isAuthReady) {
         return (
             <div className="flex items-center justify-center min-h-screen bg-gray-100 text-gray-800">
@@ -4116,6 +3911,8 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                         className={`flex-grow w-full text-lg leading-relaxed mb-4 relative
                             ${isDarkMode ? 'editor-dark' : 'editor-light'}`}
                     ></div>
+
+
 
                     {/* Floating Ask AI Button for Selected Text */}
                     {showSelectedTextMenu && (

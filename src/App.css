@@ -1,0 +1,16 @@
+/* Editor.js block controls fix */
+.ce-block {
+  position: relative;
+}
+.ce-block__content {
+  position: relative;
+  z-index: 1;
+}
+.ce-toolbar__plus, .ce-toolbar__settings-btn {
+  z-index: 2;
+}
+
+/* Optional: Prevent Tailwind or global resets from breaking Editor.js */
+.ce-block, .ce-block__content, .ce-toolbar__plus, .ce-toolbar__settings-btn {
+  box-sizing: content-box !important;
+} 
