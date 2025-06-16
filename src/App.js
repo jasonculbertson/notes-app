@@ -748,6 +748,27 @@ const App = () => {
     const [isEditingPreview, setIsEditingPreview] = useState(false);
     const [editedPreviewContent, setEditedPreviewContent] = useState('');
 
+    // Phase 5: UI Cleanup - New AI Title & Icon Suggestions State
+    const [aiTitleIconSuggestions, setAiTitleIconSuggestions] = useState([]); // Stores [{ title: '...', icon: '...' }, ...]
+    const [showAiTitleSuggestions, setShowAiTitleSuggestions] = useState(false); // Optional granular control
+
+    // Phase 5: UI Cleanup - New AI Tag Suggestions State
+    const [aiTagSuggestions, setAiTagSuggestions] = useState([]); // Stores ['tag1', 'tag2', ...]
+
+    // Refs
+    const tagInputContainerRef = useRef(null); // To detect clicks outside for tag suggestions
+
+    // Phase 5: Transient behavior for AI tag suggestions
+    useEffect(() => {
+        if (aiTagSuggestions.length > 0) {
+            const timer = setTimeout(() => {
+                setAiTagSuggestions([]); // Clear after a delay
+            }, 10000); // Disappear after 10 seconds
+
+            return () => clearTimeout(timer); // Clear timeout on unmount or re-trigger
+        }
+    }, [aiTagSuggestions]);
+
     // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
     const handleTextSelection = useCallback(() => {
         console.log("Text selection handler triggered");
@@ -2114,6 +2135,34 @@ Suggested title and icon pairs:`;
         setSuggestedTitles([]);
     };
 
+    // Phase 5: New AI Title & Icon Suggestions Handler
+    const handleApplyAiTitleIcon = async (suggestedTitle, suggestedIcon) => {
+        if (!db || !userId || !currentDocumentId || !appId) return;
+        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, currentDocumentId);
+        try {
+            await updateDoc(docRef, {
+                title: suggestedTitle,
+                icon: suggestedIcon // Update icon field too
+            });
+            setCurrentDocumentTitle(suggestedTitle);
+            setCurrentDocumentIcon(suggestedIcon);
+            setSaveStatus('Title & icon updated!');
+            setAiTitleIconSuggestions([]); // Clear suggestions after applying
+            setShowAiTitleSuggestions(false); // Hide the suggestion UI
+        } catch (e) {
+            console.error("Error applying AI title/icon:", e);
+            setSaveStatus('Failed to update title/icon!');
+        }
+    };
+
+    // Phase 5: AI Tag Suggestions Handler
+    const handleTriggerAiTagSuggestions = () => {
+        if (!currentDocumentId) return;
+        const plainTextContent = convertHtmlToPlainText(currentDocumentContent);
+        // This LLM call should specifically target the "suggestTags" tool
+        askLlm(`Suggest relevant tags for the following document: \n\n${plainTextContent}`);
+    };
+
     // Icon picker functionality
     const getFilteredEmojis = () => {
         let emojis = activeIconCategory === 'All' 
@@ -3111,6 +3160,41 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         },
                         required: ["searchQuery"]
                     }
+                },
+                {
+                    name: "suggestTitleAndIcon",
+                    description: "Suggests alternative titles and relevant emojis or small image URLs for the current document based on its content. Provide a list of up to 4 suggestions.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            suggestions: {
+                                type: "ARRAY",
+                                items: {
+                                    type: "OBJECT",
+                                    properties: {
+                                        title: { type: "STRING", description: "A concise, descriptive title suggestion." },
+                                        icon: { type: "STRING", description: "A relevant emoji or a placeholder image URL (e.g., from placehold.co) for the icon." }
+                                    },
+                                    required: ["title", "icon"]
+                                }
+                            }
+                        },
+                        required: ["suggestions"]
+                    }
+                },
+                {
+                    name: "suggestTags",
+                    description: "Suggests relevant tags (keywords) for the current document based on its content. Provide a list of up to 5 concise tag strings.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            tags: {
+                                type: "ARRAY",
+                                items: { type: "STRING", description: "A concise tag string." }
+                            }
+                        },
+                        required: ["tags"]
+                    }
                 }
             ]
         }];
@@ -3191,6 +3275,17 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                 } else {
                                     responseText += `❌ Search failed: ${result.error}. `;
                                 }
+                            } else if (functionName === 'suggestTitleAndIcon') {
+                                // Handle AI Title & Icon Suggestions
+                                setAiTitleIconSuggestions(functionArgs.suggestions);
+                                setShowAiTitleSuggestions(true);
+                                setLlmResponse(''); // Clear response as suggestions are the primary output
+                                responseText = ''; // Don't add to response text
+                            } else if (functionName === 'suggestTags') {
+                                // Handle AI Tag Suggestions
+                                setAiTagSuggestions(functionArgs.tags);
+                                setLlmResponse(''); // Clear response as suggestions are the primary output
+                                responseText = ''; // Don't add to response text
                             }
                             
                             functionResults.push({
@@ -3733,12 +3828,16 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                 setShowPlusOverlay(false);
                 setShowGoogleDriveOptions(false);
             }
+            // Clear AI tag suggestions when clicking outside tag input container
+            if (aiTagSuggestions.length > 0 && tagInputContainerRef.current && !tagInputContainerRef.current.contains(event.target)) {
+                setAiTagSuggestions([]);
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay]);
+    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay, aiTagSuggestions]);
 
 
 
@@ -4268,31 +4367,6 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                     onChange={(e) => setCurrentDocumentTitle(e.target.value)}
                                     placeholder="New page"
                                 />
-                                {currentDocumentContent?.trim() && (
-                                    <button
-                                        onClick={getSuggestedTitles}
-                                        disabled={isLoadingTitleSuggestions}
-                                        className={`ml-2 px-3 py-2 rounded-md text-sm font-medium transition-colors duration-200 flex items-center gap-1
-                                            ${isDarkMode ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-blue-500 text-white hover:bg-blue-600'}
-                                            disabled:opacity-50 disabled:cursor-not-allowed
-                                        `}
-                                        title="Generate title suggestions based on content"
-                                    >
-                                        {isLoadingTitleSuggestions ? (
-                                            <>
-                                                <div className="animate-spin rounded-full h-3 w-3 border-t border-white"></div>
-                                                <span>AI...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                                </svg>
-                                                <span>Title</span>
-                                            </>
-                                        )}
-                                    </button>
-                                )}
                             </div>
                             
                             {/* AI Suggested Titles */}
@@ -4431,72 +4505,84 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
 
                     {currentDocumentId && (
                         <>
-                            {/* Tags input/display */}
-                            <div className="mb-4">
-                                <div className="flex flex-wrap items-center gap-2 mb-2">
-                                    {currentDocumentTags.map((tag, idx) => (
-                                        <span key={idx} className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                                            ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-blue-100 text-blue-800'}
-                                        `}>
-                                            {tag}
-                                            <button
-                                                onClick={() => handleRemoveTag(tag)}
-                                                className={`ml-1 -mr-0.5 h-3 w-3 rounded-full flex items-center justify-center
-                                                    ${isDarkMode ? 'text-gray-400 hover:text-gray-200' : 'text-blue-500 hover:text-blue-700'}
-                                                `}
-                                            >
-                                                <svg className="h-2 w-2" stroke="currentColor" fill="none" viewBox="0 0 8 8">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M1 1l6 6m0-6L1 7" />
-                                                </svg>
-                                            </button>
-                                        </span>
-                                    ))}
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <input
-                                        type="text"
-                                        className={`flex-grow min-w-[150px] max-w-xs p-1.5 rounded-md text-sm
-                                            ${isDarkMode ? 'bg-gray-700 text-gray-200 placeholder-gray-400 border-gray-600' : 'bg-gray-50 text-gray-800 placeholder-gray-500 border-gray-300'}
-                                            border focus:outline-none focus:ring-1 focus:ring-blue-400
-                                        `}
-                                        placeholder="Add tag (e.g., 'work, idea')"
-                                        onKeyPress={(e) => {
-                                            if (e.key === 'Enter') {
-                                                e.preventDefault(); // Prevent new line in editor
-                                                const tagsToAdd = e.target.value.split(',').map(t => t.trim()).filter(Boolean);
-                                                tagsToAdd.forEach(tag => handleAddTag(tag));
-                                                e.target.value = '';
-                                            }
-                                        }}
-                                    />
-                                    {currentDocumentContent?.trim() && (
+                            {/* Tags input/display - Phase 5: Streamlined with integrated AI */}
+                            <div ref={tagInputContainerRef} className="relative flex flex-wrap items-center gap-2 mb-4 group">
+                                {currentDocumentTags.map((tag, idx) => (
+                                    <span key={idx} className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                                        ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-blue-100 text-blue-800'}
+                                    `}>
+                                        {tag}
                                         <button
-                                            onClick={getSuggestedTags}
-                                            disabled={isLoadingSuggestions}
-                                            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors duration-200 flex items-center gap-1
-                                                ${isDarkMode ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-purple-500 text-white hover:bg-purple-600'}
-                                                disabled:opacity-50 disabled:cursor-not-allowed
+                                            onClick={() => handleRemoveTag(tag)}
+                                            className={`ml-1 -mr-0.5 h-3 w-3 rounded-full flex items-center justify-center
+                                                ${isDarkMode ? 'text-gray-400 hover:text-gray-200' : 'text-blue-500 hover:text-blue-700'}
                                             `}
                                         >
-                                            {isLoadingSuggestions ? (
-                                                <>
-                                                    <div className="animate-spin rounded-full h-3 w-3 border-t border-white"></div>
-                                                    <span>AI...</span>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                                                    </svg>
-                                                    <span>AI Tags</span>
-                                                </>
-                                            )}
+                                            <svg className="h-2 w-2" stroke="currentColor" fill="none" viewBox="0 0 8 8">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M1 1l6 6m0-6L1 7" />
+                                            </svg>
                                         </button>
-                                    )}
-                                </div>
-                                {/* AI Suggested Tags */}
+                                    </span>
+                                ))}
+                                <input
+                                    type="text"
+                                    className={`flex-grow min-w-[100px] max-w-xs p-1.5 rounded-md text-sm pr-8
+                                        ${isDarkMode ? 'bg-gray-700 text-gray-200 placeholder-gray-400 border-gray-600' : 'bg-gray-50 text-gray-800 placeholder-gray-500 border-gray-300'}
+                                        border focus:outline-none focus:ring-1 focus:ring-blue-400`}
+                                    placeholder="Add tag (e.g., 'work, idea')"
+                                    onKeyPress={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault(); // Prevent new line in editor
+                                            const tagsToAdd = e.target.value.split(',').map(t => t.trim()).filter(Boolean);
+                                            tagsToAdd.forEach(tag => handleAddTag(tag));
+                                            e.target.value = '';
+                                        }
+                                    }}
+                                />
+                                {/* AI Tags Icon inside input area */}
+                                <button
+                                    onClick={handleTriggerAiTagSuggestions}
+                                    className={`absolute right-0 top-1/2 -translate-y-1/2 mr-1 p-1 rounded-md
+                                        ${isDarkMode ? 'text-gray-400 hover:bg-gray-600' : 'text-gray-600 hover:bg-gray-200'}
+                                        opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity duration-200`}
+                                    title="Suggest AI Tags"
+                                    disabled={llmLoading || !currentDocumentId}
+                                >
+                                    {/* AI icon (magic wand) */}
+                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                        <path d="M11.085 14.887A2.002 2.002 0 0013 13h1a2 2 0 001.912-1.412A2 2.002 0 0017 10V9a2 2 0 00-1.088-1.722A2 2.002 0 0013 6h-1.085l-.57-.57a1 1 0 00-1.414 0L9 5.293V4a1 1 0 00-2 0v1.293L5.414 7.293A1 1 0 004 8h-1a1 1 0 00-1 1v1a1 1 0 001 1h1a1 1 0 001 1v1.085l.57.57a1 1 0 001.414 0L10 14.707V16a1 1 0 002 0v-1.293l1.586-1.586A2.002 2.002 0 0011.085 14.887zM10 2a1 1 0 00-1 1v1a1 1 0 102 0V3a1 1 0 00-1-1z" clipRule="evenodd" fillRule="evenodd"></path>
+                                    </svg>
+                                </button>
+
+                                {/* AI Tag Suggestions Display */}
+                                {aiTagSuggestions.length > 0 && (
+                                    <div className={`w-full flex flex-wrap gap-2 mt-2 p-2 rounded-md shadow-inner
+                                        ${isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-800'}`}>
+                                        <span className="text-xs font-semibold uppercase mr-2 opacity-75">AI Suggestions:</span>
+                                        {aiTagSuggestions.map((tag, idx) => (
+                                            <button
+                                                key={idx}
+                                                onClick={() => { handleAddTag(tag); setAiTagSuggestions(prev => prev.filter(t => t !== tag)); }}
+                                                className={`px-2 py-0.5 rounded-full text-xs font-medium
+                                                    ${isDarkMode ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-indigo-100 hover:bg-indigo-200 text-indigo-800'}
+                                                    transition-colors duration-200`}
+                                            >
+                                                + {tag}
+                                            </button>
+                                        ))}
+                                        <button
+                                            onClick={() => setAiTagSuggestions([])}
+                                            className={`ml-auto text-xs px-2 py-0.5 rounded-md
+                                                ${isDarkMode ? 'text-gray-400 hover:bg-gray-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                                        >
+                                            Dismiss
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Legacy AI Suggested Tags - Keep for backward compatibility */}
                                 {suggestedTags.length > 0 && (
-                                    <div className="mt-2">
+                                    <div className="w-full mt-2">
                                         <div className={`text-xs font-medium mb-1 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
                                             AI Suggestions:
                                         </div>
@@ -4677,7 +4763,55 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                             </span>
                         </div>
                     )}
+
+                    {/* Phase 5: AI Title & Icon Suggestions Display */}
+                    {aiTitleIconSuggestions.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-gray-300 dark:border-gray-600">
+                            <h4 className="font-semibold text-sm mb-2">AI Title & Icon Suggestions:</h4>
+                            <div className="grid grid-cols-2 gap-2">
+                                {aiTitleIconSuggestions.map((suggestion, index) => (
+                                    <button
+                                        key={index}
+                                        onClick={() => handleApplyAiTitleIcon(suggestion.title, suggestion.icon)}
+                                        className={`flex items-center p-3 rounded-md text-left
+                                            ${isDarkMode ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-blue-50 hover:bg-blue-100 text-blue-900'}
+                                            transition-colors duration-200`}
+                                    >
+                                        {suggestion.icon && (
+                                            suggestion.icon.startsWith('http') ?
+                                                <img src={suggestion.icon} alt="icon" className="w-5 h-5 mr-2 object-cover rounded-sm" /> :
+                                                <span className="mr-2 text-xl leading-none">{suggestion.icon}</span>
+                                        )}
+                                        <span className="font-medium truncate">{suggestion.title}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            {/* Dismiss button for suggestions */}
+                            <button
+                                onClick={() => setAiTitleIconSuggestions([])}
+                                className={`text-xs mt-3 px-2 py-1 rounded-md
+                                    ${isDarkMode ? 'text-gray-400 hover:bg-gray-700' : 'text-gray-600 hover:bg-gray-100'}`}
+                            >
+                                Dismiss suggestions
+                            </button>
+                        </div>
+                    )}
                 </div>
+
+                {/* Phase 5: AI Assistant Quick Actions */}
+                {currentDocumentId && (
+                    <div className="mb-4">
+                        <button
+                            onClick={() => askLlm("Suggest a good title and relevant icon for the current document based on its content.")}
+                            className={`w-full px-3 py-2 rounded-md text-sm font-medium text-white
+                                ${currentDocumentId ? 'bg-purple-500 hover:bg-purple-600' : 'bg-gray-400 cursor-not-allowed'}
+                                transition-colors duration-200 shadow-sm`}
+                            disabled={llmLoading || !currentDocumentId}
+                        >
+                            Suggest Title & Icon
+                        </button>
+                    </div>
+                )}
 
                 {/* External Search Suggestions */}
                 {externalSearchSuggestions.length > 0 && (
