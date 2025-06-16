@@ -1911,6 +1911,160 @@ const App = () => {
 
     // Editor initialization removed - handled by simple useEffect above
 
+    // Feature 2: Internal Linking & Backlinks Handlers
+    const detectInternalLinkTrigger = useCallback(() => {
+        try {
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
+
+            const range = selection.getRangeAt(0);
+            const editorElement = editorElementRef.current;
+            
+            if (!editorElement || !editorElement.contains(range.commonAncestorContainer)) return;
+
+            // Get text content around cursor
+            const textNode = range.startContainer;
+            if (textNode.nodeType !== Node.TEXT_NODE) return;
+
+            const textContent = textNode.textContent;
+            const cursorPosition = range.startOffset;
+            
+            // Look for [[ pattern before cursor
+            const beforeCursor = textContent.substring(0, cursorPosition);
+            const linkMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
+            
+            if (linkMatch && allDocumentTitles.length > 0) {
+                const searchTerm = linkMatch[1];
+                const linkStartPos = cursorPosition - linkMatch[0].length;
+                
+                // Create range for the [[ trigger
+                const linkRange = document.createRange();
+                linkRange.setStart(textNode, linkStartPos);
+                linkRange.setEnd(textNode, cursorPosition);
+                
+                // Get position for autocomplete
+                const rect = linkRange.getBoundingClientRect();
+                
+                // Filter document suggestions
+                const suggestions = allDocumentTitles.filter(doc => 
+                    doc.title.toLowerCase().includes(searchTerm.toLowerCase()) &&
+                    doc.id !== currentDocumentId
+                ).slice(0, 5);
+                
+                setLinkAutocomplete({
+                    visible: suggestions.length > 0,
+                    x: rect.left,
+                    y: rect.bottom + 5,
+                    searchTerm,
+                    suggestions,
+                    selectedIndex: 0,
+                    range: linkRange.cloneRange()
+                });
+            } else {
+                setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+            }
+        } catch (error) {
+            console.error('Error detecting internal link trigger:', error);
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+        }
+    }, [allDocumentTitles, currentDocumentId]);
+
+    const insertInternalLink = useCallback((targetDoc) => {
+        try {
+            if (!linkAutocomplete.range || !targetDoc) return;
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            
+            // Extend range to include the full [[ pattern
+            const textNode = linkAutocomplete.range.startContainer;
+            const fullRange = document.createRange();
+            fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
+            fullRange.setEnd(textNode, linkAutocomplete.range.endOffset + linkAutocomplete.searchTerm.length);
+            
+            selection.addRange(fullRange);
+            
+            // Create internal link HTML with proper styling
+            const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
+            
+            // Replace the [[ pattern with the link
+            document.execCommand('insertHTML', false, linkHtml);
+            
+            // Update document's linked pages
+            updateDocumentLinks(currentDocumentId, targetDoc.id);
+            
+            // Hide autocomplete
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+            
+            // Trigger content save
+            if (editorElementRef.current?._richEditor?.handleChange) {
+                editorElementRef.current._richEditor.handleChange();
+            }
+        } catch (error) {
+            console.error('Error inserting internal link:', error);
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+        }
+    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
+
+    const updateDocumentLinks = async (fromDocId, toDocId) => {
+        if (!db || !userId || !appId) return;
+
+        try {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${fromDocId}`);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                const docData = docSnap.data();
+                const currentLinks = docData.linkedPages || [];
+                
+                if (!currentLinks.includes(toDocId)) {
+                    await updateDoc(docRef, {
+                        linkedPages: [...currentLinks, toDocId],
+                        updatedAt: new Date()
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error updating document links:', error);
+        }
+    };
+
+    const fetchDocumentBacklinks = useCallback(async (docId) => {
+        if (!db || !userId || !appId || !docId) return;
+
+        try {
+            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
+            const snapshot = await getDocs(notesRef);
+            
+            const backlinks = [];
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                if (data.linkedPages && data.linkedPages.includes(docId)) {
+                    backlinks.push({
+                        id: doc.id,
+                        title: data.title || 'Untitled',
+                        updatedAt: data.updatedAt
+                    });
+                }
+            });
+            
+            setDocumentBacklinks(backlinks);
+        } catch (error) {
+            console.error('Error fetching backlinks:', error);
+        }
+    }, [db, userId, appId]);
+
+    // Handle internal link clicks
+    const handleInternalLinkClick = useCallback((e) => {
+        if (e.target.matches('a[data-internal-link-id]')) {
+            e.preventDefault();
+            const targetDocId = e.target.getAttribute('data-internal-link-id');
+            if (targetDocId && targetDocId !== currentDocumentId) {
+                handleDocumentSelect(targetDocId);
+            }
+        }
+    }, [currentDocumentId, handleDocumentSelect]);
+
     // Separate useEffect for text selection listeners and internal linking
     useEffect(() => {
         console.log("Setting up text selection and internal linking listeners");
@@ -1977,6 +2131,35 @@ const App = () => {
             console.log("Text selection and internal linking listeners removed");
         };
     }, [handleTextSelection, detectInternalLinkTrigger, linkAutocomplete.visible, linkAutocomplete.selectedIndex, linkAutocomplete.suggestions, insertInternalLink]);
+
+    // Update all document titles for autocomplete
+    useEffect(() => {
+        if (documents.length > 0) {
+            const titles = documents.map(doc => ({
+                id: doc.id,
+                title: doc.title || 'Untitled'
+            }));
+            setAllDocumentTitles(titles);
+        }
+    }, [documents]);
+
+    // Fetch backlinks when document changes
+    useEffect(() => {
+        if (currentDocumentId) {
+            fetchDocumentBacklinks(currentDocumentId);
+        }
+    }, [currentDocumentId, fetchDocumentBacklinks]);
+
+    // Add click listener for internal links
+    useEffect(() => {
+        const editorElement = editorElementRef.current;
+        if (editorElement) {
+            editorElement.addEventListener('click', handleInternalLinkClick);
+            return () => {
+                editorElement.removeEventListener('click', handleInternalLinkClick);
+            };
+        }
+    }, [handleInternalLinkClick]);
 
     // Content update logic removed - handled by simple useEffect above
 
@@ -2473,189 +2656,6 @@ Return only the expanded text without any additional commentary.`;
             return false;
         }
     };
-
-    // Feature 2: Internal Linking & Backlinks Handlers
-    const detectInternalLinkTrigger = useCallback(() => {
-        try {
-            const selection = window.getSelection();
-            if (!selection.rangeCount) return;
-
-            const range = selection.getRangeAt(0);
-            const editorElement = editorElementRef.current;
-            
-            if (!editorElement || !editorElement.contains(range.commonAncestorContainer)) return;
-
-            // Get text content around cursor
-            const textNode = range.startContainer;
-            if (textNode.nodeType !== Node.TEXT_NODE) return;
-
-            const textContent = textNode.textContent;
-            const cursorPosition = range.startOffset;
-            
-            // Look for [[ pattern before cursor
-            const beforeCursor = textContent.substring(0, cursorPosition);
-            const linkMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
-            
-            if (linkMatch && allDocumentTitles.length > 0) {
-                const searchTerm = linkMatch[1];
-                const linkStartPos = cursorPosition - linkMatch[0].length;
-                
-                // Create range for the [[ trigger
-                const linkRange = document.createRange();
-                linkRange.setStart(textNode, linkStartPos);
-                linkRange.setEnd(textNode, cursorPosition);
-                
-                // Get position for autocomplete
-                const rect = linkRange.getBoundingClientRect();
-                
-                // Filter document suggestions
-                const suggestions = allDocumentTitles.filter(doc => 
-                    doc.title.toLowerCase().includes(searchTerm.toLowerCase()) &&
-                    doc.id !== currentDocumentId
-                ).slice(0, 5);
-                
-                setLinkAutocomplete({
-                    visible: suggestions.length > 0,
-                    x: rect.left,
-                    y: rect.bottom + 5,
-                    searchTerm,
-                    suggestions,
-                    selectedIndex: 0,
-                    range: linkRange.cloneRange()
-                });
-            } else {
-                setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-            }
-        } catch (error) {
-            console.error('Error detecting internal link trigger:', error);
-            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-        }
-    }, [allDocumentTitles, currentDocumentId]);
-
-    const insertInternalLink = useCallback((targetDoc) => {
-        try {
-            if (!linkAutocomplete.range || !targetDoc) return;
-
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            
-            // Extend range to include the full [[ pattern
-            const textNode = linkAutocomplete.range.startContainer;
-            const fullRange = document.createRange();
-            fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
-            fullRange.setEnd(textNode, linkAutocomplete.range.endOffset + linkAutocomplete.searchTerm.length);
-            
-            selection.addRange(fullRange);
-            
-            // Create internal link HTML with proper styling
-            const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
-            
-            // Replace the [[ pattern with the link
-            document.execCommand('insertHTML', false, linkHtml);
-            
-            // Update document's linked pages
-            updateDocumentLinks(currentDocumentId, targetDoc.id);
-            
-            // Hide autocomplete
-            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-            
-            // Trigger content save
-            if (editorElementRef.current?._richEditor?.handleChange) {
-                editorElementRef.current._richEditor.handleChange();
-            }
-        } catch (error) {
-            console.error('Error inserting internal link:', error);
-            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-        }
-    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
-
-    const updateDocumentLinks = async (fromDocId, toDocId) => {
-        if (!db || !userId || !appId) return;
-
-        try {
-            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${fromDocId}`);
-            const docSnap = await getDoc(docRef);
-            
-            if (docSnap.exists()) {
-                const docData = docSnap.data();
-                const currentLinks = docData.linkedPages || [];
-                
-                if (!currentLinks.includes(toDocId)) {
-                    await updateDoc(docRef, {
-                        linkedPages: [...currentLinks, toDocId],
-                        updatedAt: new Date()
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Error updating document links:', error);
-        }
-    };
-
-    const fetchDocumentBacklinks = useCallback(async (docId) => {
-        if (!db || !userId || !appId || !docId) return;
-
-        try {
-            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
-            const snapshot = await getDocs(notesRef);
-            
-            const backlinks = [];
-            snapshot.docs.forEach(doc => {
-                const data = doc.data();
-                if (data.linkedPages && data.linkedPages.includes(docId)) {
-                    backlinks.push({
-                        id: doc.id,
-                        title: data.title || 'Untitled',
-                        updatedAt: data.updatedAt
-                    });
-                }
-            });
-            
-            setDocumentBacklinks(backlinks);
-        } catch (error) {
-            console.error('Error fetching backlinks:', error);
-        }
-    }, [db, userId, appId]);
-
-    // Update all document titles for autocomplete
-    useEffect(() => {
-        if (documents.length > 0) {
-            const titles = documents.map(doc => ({
-                id: doc.id,
-                title: doc.title || 'Untitled'
-            }));
-            setAllDocumentTitles(titles);
-        }
-    }, [documents]);
-
-    // Fetch backlinks when document changes
-    useEffect(() => {
-        if (currentDocumentId) {
-            fetchDocumentBacklinks(currentDocumentId);
-        }
-    }, [currentDocumentId, fetchDocumentBacklinks]);
-
-    // Handle internal link clicks
-    const handleInternalLinkClick = useCallback((e) => {
-        if (e.target.matches('a[data-internal-link-id]')) {
-            e.preventDefault();
-            const targetDocId = e.target.getAttribute('data-internal-link-id');
-            if (targetDocId && targetDocId !== currentDocumentId) {
-                handleDocumentSelect(targetDocId);
-            }
-        }
-    }, [currentDocumentId, handleDocumentSelect]);
-
-    // Add click listener for internal links
-    useEffect(() => {
-        const editorElement = editorElementRef.current;
-        if (editorElement) {
-            editorElement.addEventListener('click', handleInternalLinkClick);
-            return () => {
-                editorElement.removeEventListener('click', handleInternalLinkClick);
-            };
-        }
-    }, [handleInternalLinkClick]);
 
     // Icon picker functionality
     const getFilteredEmojis = () => {
