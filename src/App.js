@@ -4456,20 +4456,34 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                 )}
                                 
                                 <textarea
+                                    ref={(el) => {
+                                        if (el) {
+                                            // Auto-resize on mount and content change
+                                            const resize = () => {
+                                                el.style.height = 'auto';
+                                                el.style.height = el.scrollHeight + 'px';
+                                            };
+                                            // Resize immediately
+                                            setTimeout(resize, 0);
+                                        }
+                                    }}
                                     className={`flex-1 min-w-0 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2 resize-none overflow-hidden
                                         ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
                                     value={currentDocumentTitle}
-                                    onChange={(e) => setCurrentDocumentTitle(e.target.value)}
+                                    onChange={(e) => {
+                                        setCurrentDocumentTitle(e.target.value);
+                                        // Auto-resize on change
+                                        setTimeout(() => {
+                                            e.target.style.height = 'auto';
+                                            e.target.style.height = e.target.scrollHeight + 'px';
+                                        }, 0);
+                                    }}
                                     placeholder="New page"
                                     rows="1"
                                     style={{
-                                        minHeight: '1.2em',
-                                        lineHeight: '1.2em'
-                                    }}
-                                    onInput={(e) => {
-                                        // Auto-resize textarea to fit content
-                                        e.target.style.height = 'auto';
-                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                        minHeight: '3.5rem',
+                                        lineHeight: '1.1',
+                                        height: 'auto'
                                     }}
                                 />
                             </div>
