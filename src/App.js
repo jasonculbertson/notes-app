@@ -549,6 +549,17 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         editor, 
         isInitialized: true,
         handleChange: handleChange, // Expose the handleChange function
+        getHtml: () => {
+            return editor ? editor.innerHTML : '';
+        },
+        setHtml: (htmlContent) => {
+            if (editor) {
+                editor.innerHTML = htmlContent || '';
+                updatePlaceholder();
+                // Save to undo stack
+                saveToUndoStack(htmlContent || '');
+            }
+        },
         updateContent: (newContent) => {
             if (editor) {
                 // Save current cursor position
@@ -564,7 +575,6 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                     // Create a temporary element to calculate text offset
                     const tempDiv = document.createElement('div');
                     tempDiv.innerHTML = editor.innerHTML;
-                    const textContent = tempDiv.textContent || tempDiv.innerText || '';
                     
                     // Find the text offset position
                     let textOffset = 0;
@@ -576,7 +586,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                     );
                     
                     let node;
-                    while (node = walker.nextNode()) {
+                                                while ((node = walker.nextNode())) {
                         if (node === selection.anchorNode) {
                             textOffset += cursorPosition;
                             break;
@@ -608,7 +618,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                             let targetNode = null;
                             let targetOffset = 0;
                             
-                            while (node = walker.nextNode()) {
+                            while ((node = walker.nextNode())) {
                                 const nodeLength = node.textContent.length;
                                 if (currentOffset + nodeLength >= cursorPosition) {
                                     targetNode = node;
@@ -792,7 +802,8 @@ const App = () => {
         return doc.body.textContent || "";
     }, []);
 
-    // Helper function to convert HTML/text to Editor.js format
+    // Helper function to convert HTML/text to Editor.js format (currently unused)
+    // eslint-disable-next-line no-unused-vars
     const convertToEditorFormat = useCallback((content) => {
         if (!content) return { blocks: [] };
         
@@ -883,6 +894,32 @@ const App = () => {
         }).filter(text => text.trim()).join('\n\n');
     }, []);
 
+    // Helper function to sanitize HTML content for security
+    const sanitizeHtml = useCallback((htmlString) => {
+        if (!htmlString) return '';
+        
+        if (!window.DOMPurify) {
+            console.warn("DOMPurify not loaded. HTML content is not being sanitized!");
+            return htmlString; // Fallback, but dangerous
+        }
+        
+        // Configure allowed tags and attributes
+        const cleanHtml = window.DOMPurify.sanitize(htmlString, {
+            USE_PROFILES: { html: true }, // Use default HTML profile
+            ALLOWED_TAGS: [
+                'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                'ul', 'ol', 'li', 'strong', 'b', 'em', 'i', 'u',
+                'a', 'span', 'div', 'br', 'hr', 'blockquote',
+                'pre', 'code', 'img'
+            ],
+            ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class'],
+            FORBID_TAGS: ['script', 'iframe', 'style', 'object', 'embed'],
+            FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style']
+        });
+        
+        return cleanHtml;
+    }, []);
+
     // Helper function to convert Editor.js JSON to HTML for rich text editor
     const convertEditorJsonToHtml = useCallback((content) => {
         if (!content) return '';
@@ -934,6 +971,119 @@ const App = () => {
             return `<p>${content}</p>`;
         }
     }, []);
+
+    // LLM Function Calling - Phase 1: Core HTML Content Functions
+    const createNewDocument = useCallback(async (title, htmlContent, tags = []) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot create document: missing db, userId, or appId");
+            return { success: false, error: "Database not initialized" };
+        }
+        
+        try {
+            // Sanitize the HTML content
+            const sanitizedContent = sanitizeHtml(htmlContent);
+            
+            // Create new document
+            const newDocRef = doc(collection(db, `artifacts/${appId}/users/${userId}/notes`));
+            const newDoc = {
+                title: title || 'AI Generated Document',
+                content: sanitizedContent,
+                tags: tags || [],
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                parentId: null,
+                order: Date.now()
+            };
+            
+            await setDoc(newDocRef, newDoc);
+            
+            // Update local state
+            const newDocumentData = { id: newDocRef.id, ...newDoc };
+            setDocuments(prev => [...prev, newDocumentData]);
+            
+            // Switch to the new document
+            setCurrentDocumentId(newDocRef.id);
+            
+            console.log("✅ Created new document:", newDocRef.id);
+            return { 
+                success: true, 
+                documentId: newDocRef.id,
+                message: `Created new document: "${title}"`
+            };
+        } catch (error) {
+            console.error("Error creating new document:", error);
+            return { success: false, error: error.message };
+        }
+    }, [db, userId, appId, sanitizeHtml]);
+    
+    const appendContentToDocument = useCallback(async (htmlContentToAppend, documentId = null) => {
+        const targetDocId = documentId || currentDocumentId;
+        
+        if (!db || !userId || !appId || !targetDocId) {
+            console.error("Cannot append content: missing required parameters");
+            return { success: false, error: "Missing required parameters" };
+        }
+        
+        try {
+            // Sanitize the HTML content to append
+            const sanitizedContent = sanitizeHtml(htmlContentToAppend);
+            
+            // Get current document content
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, targetDocId);
+            const docSnap = await getDoc(docRef);
+            
+            if (!docSnap.exists()) {
+                return { success: false, error: "Document not found" };
+            }
+            
+            const currentData = docSnap.data();
+            let existingContent = currentData.content || '';
+            
+            // Handle format detection for existing content
+            if (existingContent && typeof existingContent === 'string') {
+                try {
+                    const parsedContent = JSON.parse(existingContent);
+                    if (parsedContent && parsedContent.blocks && Array.isArray(parsedContent.blocks)) {
+                        // Convert Editor.js JSON to HTML
+                        existingContent = convertEditorJsonToHtml(existingContent);
+                    }
+                } catch (e) {
+                    // Already HTML or plain text
+                }
+            }
+            
+            // Sanitize existing content
+            existingContent = sanitizeHtml(existingContent);
+            
+            // Append new content
+            const combinedContent = existingContent + (existingContent ? '<br><br>' : '') + sanitizedContent;
+            
+            // Update document
+            await updateDoc(docRef, {
+                content: combinedContent,
+                updatedAt: new Date()
+            });
+            
+            // Update local state if this is the current document
+            if (targetDocId === currentDocumentId) {
+                setCurrentDocumentContent(combinedContent);
+                
+                // Update editor if it exists
+                if (editorElementRef.current && editorElementRef.current._richEditor) {
+                    editorElementRef.current._richEditor.setHtml(combinedContent);
+                }
+            }
+            
+            console.log("✅ Appended content to document:", targetDocId);
+            return { 
+                success: true, 
+                message: `Appended content to document`
+            };
+        } catch (error) {
+            console.error("Error appending content to document:", error);
+            return { success: false, error: error.message };
+        }
+    }, [db, userId, appId, currentDocumentId, sanitizeHtml, convertEditorJsonToHtml]);
 
     // Phase 2: File Content Extraction
     const extractFileContent = useCallback(async (file, downloadURL) => {
@@ -1211,9 +1361,9 @@ const App = () => {
             // Clear any existing content
             editorElementRef.current.innerHTML = '';
             
-            // Convert Editor.js JSON to HTML for rich text editor
-            const htmlContent = convertEditorJsonToHtml(currentDocumentContent);
-            console.log("📝 Converted content for rich text editor:", htmlContent.substring(0, 100) + '...');
+            // Convert Editor.js JSON to HTML for rich text editor and sanitize
+            const htmlContent = sanitizeHtml(convertEditorJsonToHtml(currentDocumentContent));
+            console.log("📝 Converted and sanitized content for rich text editor:", htmlContent.substring(0, 100) + '...');
             
             // Initialize the simple rich text editor with converted content
             window.setCurrentDocumentContent = setCurrentDocumentContent;
@@ -1260,7 +1410,24 @@ const App = () => {
             document.head.appendChild(editorCSS);
         }
 
-        // Editor.js loading removed - using reliable fallback editor only
+        // Load DOMPurify for HTML sanitization
+        if (!window.DOMPurify) {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/dompurify@2.4.0/dist/purify.min.js';
+            script.onload = () => console.log("✅ DOMPurify loaded for HTML sanitization");
+            script.onerror = () => console.error("❌ Failed to load DOMPurify");
+            document.head.appendChild(script);
+        }
+        
+        // Load Turndown for HTML to Markdown conversion
+        if (!window.TurndownService) {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/turndown/dist/turndown.js';
+            script.onload = () => console.log("✅ Turndown loaded for HTML to Markdown conversion");
+            script.onerror = () => console.error("❌ Failed to load Turndown");
+            document.head.appendChild(script);
+        }
+        
         console.log("📝 Using reliable rich text editor (no CDN dependencies)");
     }, []);
 
@@ -1480,7 +1647,31 @@ const App = () => {
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    setCurrentDocumentContent(data.content || '');
+                    let content = data.content || '';
+                    
+                    // Detect content format and handle accordingly
+                    if (content && typeof content === 'string') {
+                        try {
+                            // Try to parse as JSON to check if it's Editor.js format
+                            const parsedContent = JSON.parse(content);
+                            if (parsedContent && parsedContent.blocks && Array.isArray(parsedContent.blocks)) {
+                                // It's Editor.js JSON format - convert to HTML
+                                console.log("📄 Detected Editor.js JSON format, converting to HTML");
+                                content = convertEditorJsonToHtml(content);
+                            } else {
+                                // It's a JSON string but not Editor.js format - treat as HTML
+                                console.log("📄 Detected JSON string (non-Editor.js), treating as HTML");
+                            }
+                        } catch (e) {
+                            // Not valid JSON - assume it's HTML
+                            console.log("📄 Detected HTML format");
+                        }
+                    }
+                    
+                    // Sanitize the content regardless of format
+                    content = sanitizeHtml(content);
+                    
+                    setCurrentDocumentContent(content);
                     setCurrentDocumentTitle(data.title || 'Untitled');
                     setCurrentDocumentTags(data.tags || []);
                     setCurrentDocumentIcon(data.icon || '');
@@ -2585,6 +2776,58 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
             }
         }
 
+        // Add function calling tools to the payload
+        const tools = [{
+            function_declarations: [
+                {
+                    name: "createNewDocument",
+                    description: "Create a new document with HTML content. Use this when the user asks to create a new document, note, or page.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            title: {
+                                type: "STRING",
+                                description: "The title for the new document"
+                            },
+                            htmlContent: {
+                                type: "STRING", 
+                                description: "The HTML content for the document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em>, etc."
+                            },
+                            tags: {
+                                type: "ARRAY",
+                                items: { type: "STRING" },
+                                description: "Optional array of tags for the document"
+                            }
+                        },
+                        required: ["title", "htmlContent"]
+                    }
+                },
+                {
+                    name: "appendContentToDocument", 
+                    description: "Append HTML content to the current document or a specific document. Use this when the user asks to add content to an existing document.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            htmlContentToAppend: {
+                                type: "STRING",
+                                description: "The HTML content to append. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em>, etc."
+                            },
+                            documentId: {
+                                type: "STRING",
+                                description: "Optional document ID. If not provided, will append to current document"
+                            }
+                        },
+                        required: ["htmlContentToAppend"]
+                    }
+                }
+            ]
+        }];
+
+        // Add tools to payload for function calling
+        if (payload.contents) {
+            payload.tools = tools;
+        }
+
         const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
         setLlmLoadingMessage('Connecting to AI...');
@@ -2601,36 +2844,96 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 result.candidates[0].content && result.candidates[0].content.parts &&
                 result.candidates[0].content.parts.length > 0) {
                 
-                const aiResponseText = result.candidates[0].content.parts[0].text;
+                const candidate = result.candidates[0];
+                const parts = candidate.content.parts;
                 
-                try {
-                    // Try to parse as structured JSON response
-                    const parsedResponse = JSON.parse(aiResponseText);
+                // Check if this is a function call response
+                if (parts.some(part => part.functionCall)) {
+                    setLlmLoadingMessage('AI is taking action...');
                     
-                    if (parsedResponse.answer && parsedResponse.search_terms) {
-                        // Structured response received
-                        setLlmResponse(parsedResponse.answer);
-                        setExternalSearchSuggestions(parsedResponse.search_terms || []);
+                    let functionResults = [];
+                    let responseText = "I'll help you with that. ";
+                    
+                    // Process each function call
+                    for (const part of parts) {
+                        if (part.functionCall) {
+                            const functionName = part.functionCall.name;
+                            const functionArgs = part.functionCall.args;
+                            
+                            console.log(`🤖 AI calling function: ${functionName}`, functionArgs);
+                            
+                            let result;
+                            if (functionName === 'createNewDocument') {
+                                result = await createNewDocument(
+                                    functionArgs.title,
+                                    functionArgs.htmlContent,
+                                    functionArgs.tags
+                                );
+                                if (result.success) {
+                                    responseText += `✅ Created new document: "${functionArgs.title}". `;
+                                } else {
+                                    responseText += `❌ Failed to create document: ${result.error}. `;
+                                }
+                            } else if (functionName === 'appendContentToDocument') {
+                                result = await appendContentToDocument(
+                                    functionArgs.htmlContentToAppend,
+                                    functionArgs.documentId
+                                );
+                                if (result.success) {
+                                    responseText += `✅ Added content to document. `;
+                                } else {
+                                    responseText += `❌ Failed to add content: ${result.error}. `;
+                                }
+                            }
+                            
+                            functionResults.push({
+                                name: functionName,
+                                response: result
+                            });
+                        }
+                    }
+                    
+                    // Set the response
+                    setLlmResponse(responseText);
+                    setExternalSearchSuggestions([]);
+                    
+                    // Add to chat history
+                    const aiMessage = { role: "model", parts: [{ text: responseText }] };
+                    setChatHistory([...newChatHistory, aiMessage]);
+                    
+                } else {
+                    // Regular text response (not a function call)
+                    const aiResponseText = parts[0].text;
+                    
+                    try {
+                        // Try to parse as structured JSON response
+                        const parsedResponse = JSON.parse(aiResponseText);
                         
-                        // Add AI response to chat history (store the answer part)
-                        const aiMessage = { role: "model", parts: [{ text: parsedResponse.answer }] };
-                        setChatHistory([...newChatHistory, aiMessage]);
-                    } else {
-                        // Fallback: treat as regular text response
+                        if (parsedResponse.answer && parsedResponse.search_terms) {
+                            // Structured response received
+                            setLlmResponse(parsedResponse.answer);
+                            setExternalSearchSuggestions(parsedResponse.search_terms || []);
+                            
+                            // Add AI response to chat history (store the answer part)
+                            const aiMessage = { role: "model", parts: [{ text: parsedResponse.answer }] };
+                            setChatHistory([...newChatHistory, aiMessage]);
+                        } else {
+                            // Fallback: treat as regular text response
+                            setLlmResponse(aiResponseText);
+                            setExternalSearchSuggestions([]);
+                            
+                            const aiMessage = { role: "model", parts: [{ text: aiResponseText }] };
+                            setChatHistory([...newChatHistory, aiMessage]);
+                        }
+                    } catch (parseError) {
+                        // Fallback: treat as regular text response if JSON parsing fails
+                        console.log('Response not in JSON format, treating as plain text');
                         setLlmResponse(aiResponseText);
                         setExternalSearchSuggestions([]);
                         
                         const aiMessage = { role: "model", parts: [{ text: aiResponseText }] };
                         setChatHistory([...newChatHistory, aiMessage]);
                     }
-                } catch (parseError) {
-                    // Fallback: treat as regular text response if JSON parsing fails
-                    console.log('Response not in JSON format, treating as plain text');
-                    setLlmResponse(aiResponseText);
-                    setExternalSearchSuggestions([]);
-                    
-                    const aiMessage = { role: "model", parts: [{ text: aiResponseText }] };
-                    setChatHistory([...newChatHistory, aiMessage]);
                 }
                 
             } else {
@@ -4114,7 +4417,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     type="text"
                     className={`w-full p-2.5 rounded-md border focus:outline-none focus:ring-1 focus:ring-blue-400 mb-3 text-sm placeholder-gray-400
                         ${isDarkMode ? 'bg-gray-700 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
-                    placeholder="Ask AI about your documents..."
+                    placeholder="Ask AI about your documents or request new content..."
                     value={llmQuestion}
                     onChange={(e) => setLlmQuestion(e.target.value)}
                     onKeyPress={(e) => {
@@ -4140,6 +4443,16 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
                 )}
+                
+                {/* AI Capabilities Hint */}
+                <div className={`mt-3 p-2 rounded-md text-xs ${isDarkMode ? 'bg-blue-900/30 text-blue-200' : 'bg-blue-50 text-blue-700'}`}>
+                    <p className="font-medium mb-1">💡 AI can now:</p>
+                    <ul className="space-y-0.5 text-xs opacity-90">
+                        <li>• Create new documents</li>
+                        <li>• Add content to existing documents</li>
+                        <li>• Answer questions about your notes</li>
+                    </ul>
+                </div>
             </div>
 
             {/* Global CDN and custom styles for scrollbar and Editor.js themes */}
