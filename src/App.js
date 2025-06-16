@@ -726,6 +726,19 @@ const App = () => {
     const [aiTransformLoading, setAiTransformLoading] = useState(false);
     const [aiTransformLoadingMessage, setAiTransformLoadingMessage] = useState('');
 
+    // Feature 2: Internal Linking & Backlinks - State Management
+    const [linkAutocomplete, setLinkAutocomplete] = useState({
+        visible: false,
+        x: 0,
+        y: 0,
+        searchTerm: '',
+        suggestions: [],
+        selectedIndex: 0,
+        range: null
+    });
+    const [documentBacklinks, setDocumentBacklinks] = useState([]);
+    const [allDocumentTitles, setAllDocumentTitles] = useState([]);
+
     // File Management States - Phase 1: File Upload
     const [uploadedFiles, setUploadedFiles] = useState([]);
     const [isUploadingFile, setIsUploadingFile] = useState(false);
@@ -1898,9 +1911,9 @@ const App = () => {
 
     // Editor initialization removed - handled by simple useEffect above
 
-    // Separate useEffect for text selection listeners
+    // Separate useEffect for text selection listeners and internal linking
     useEffect(() => {
-        console.log("Setting up text selection listeners");
+        console.log("Setting up text selection and internal linking listeners");
         
         // Add text selection listeners for contextual Q&A
         document.addEventListener('mouseup', handleTextSelection);
@@ -1909,16 +1922,61 @@ const App = () => {
         // Also add selectionchange for better detection
         document.addEventListener('selectionchange', handleTextSelection);
         
-        console.log("Text selection listeners attached to document");
+        // Add input listener for internal linking detection
+        const handleInput = (e) => {
+            // Debounce the link detection
+            setTimeout(() => {
+                detectInternalLinkTrigger();
+            }, 100);
+        };
+        
+        // Add keyboard navigation for autocomplete
+        const handleKeyDown = (e) => {
+            if (!linkAutocomplete.visible) return;
+            
+            switch (e.key) {
+                case 'ArrowDown':
+                    e.preventDefault();
+                    setLinkAutocomplete(prev => ({
+                        ...prev,
+                        selectedIndex: Math.min(prev.selectedIndex + 1, prev.suggestions.length - 1)
+                    }));
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    setLinkAutocomplete(prev => ({
+                        ...prev,
+                        selectedIndex: Math.max(prev.selectedIndex - 1, 0)
+                    }));
+                    break;
+                case 'Enter':
+                    e.preventDefault();
+                    if (linkAutocomplete.suggestions[linkAutocomplete.selectedIndex]) {
+                        insertInternalLink(linkAutocomplete.suggestions[linkAutocomplete.selectedIndex]);
+                    }
+                    break;
+                case 'Escape':
+                    e.preventDefault();
+                    setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+                    break;
+            }
+        };
+        
+        document.addEventListener('input', handleInput);
+        document.addEventListener('keydown', handleKeyDown);
+        
+        console.log("Text selection and internal linking listeners attached to document");
         
         // Cleanup
         return () => {
             document.removeEventListener('mouseup', handleTextSelection);
             document.removeEventListener('keyup', handleTextSelection);
             document.removeEventListener('selectionchange', handleTextSelection);
-            console.log("Text selection listeners removed");
+            document.removeEventListener('input', handleInput);
+            document.removeEventListener('keydown', handleKeyDown);
+            console.log("Text selection and internal linking listeners removed");
         };
-    }, [handleTextSelection]); // This useEffect depends on handleTextSelection
+    }, [handleTextSelection, detectInternalLinkTrigger, linkAutocomplete.visible, linkAutocomplete.selectedIndex, linkAutocomplete.suggestions, insertInternalLink]);
 
     // Content update logic removed - handled by simple useEffect above
 
@@ -2415,6 +2473,189 @@ Return only the expanded text without any additional commentary.`;
             return false;
         }
     };
+
+    // Feature 2: Internal Linking & Backlinks Handlers
+    const detectInternalLinkTrigger = useCallback(() => {
+        try {
+            const selection = window.getSelection();
+            if (!selection.rangeCount) return;
+
+            const range = selection.getRangeAt(0);
+            const editorElement = editorElementRef.current;
+            
+            if (!editorElement || !editorElement.contains(range.commonAncestorContainer)) return;
+
+            // Get text content around cursor
+            const textNode = range.startContainer;
+            if (textNode.nodeType !== Node.TEXT_NODE) return;
+
+            const textContent = textNode.textContent;
+            const cursorPosition = range.startOffset;
+            
+            // Look for [[ pattern before cursor
+            const beforeCursor = textContent.substring(0, cursorPosition);
+            const linkMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
+            
+            if (linkMatch && allDocumentTitles.length > 0) {
+                const searchTerm = linkMatch[1];
+                const linkStartPos = cursorPosition - linkMatch[0].length;
+                
+                // Create range for the [[ trigger
+                const linkRange = document.createRange();
+                linkRange.setStart(textNode, linkStartPos);
+                linkRange.setEnd(textNode, cursorPosition);
+                
+                // Get position for autocomplete
+                const rect = linkRange.getBoundingClientRect();
+                
+                // Filter document suggestions
+                const suggestions = allDocumentTitles.filter(doc => 
+                    doc.title.toLowerCase().includes(searchTerm.toLowerCase()) &&
+                    doc.id !== currentDocumentId
+                ).slice(0, 5);
+                
+                setLinkAutocomplete({
+                    visible: suggestions.length > 0,
+                    x: rect.left,
+                    y: rect.bottom + 5,
+                    searchTerm,
+                    suggestions,
+                    selectedIndex: 0,
+                    range: linkRange.cloneRange()
+                });
+            } else {
+                setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+            }
+        } catch (error) {
+            console.error('Error detecting internal link trigger:', error);
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+        }
+    }, [allDocumentTitles, currentDocumentId]);
+
+    const insertInternalLink = useCallback((targetDoc) => {
+        try {
+            if (!linkAutocomplete.range || !targetDoc) return;
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            
+            // Extend range to include the full [[ pattern
+            const textNode = linkAutocomplete.range.startContainer;
+            const fullRange = document.createRange();
+            fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
+            fullRange.setEnd(textNode, linkAutocomplete.range.endOffset + linkAutocomplete.searchTerm.length);
+            
+            selection.addRange(fullRange);
+            
+            // Create internal link HTML with proper styling
+            const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
+            
+            // Replace the [[ pattern with the link
+            document.execCommand('insertHTML', false, linkHtml);
+            
+            // Update document's linked pages
+            updateDocumentLinks(currentDocumentId, targetDoc.id);
+            
+            // Hide autocomplete
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+            
+            // Trigger content save
+            if (editorElementRef.current?._richEditor?.handleChange) {
+                editorElementRef.current._richEditor.handleChange();
+            }
+        } catch (error) {
+            console.error('Error inserting internal link:', error);
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+        }
+    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
+
+    const updateDocumentLinks = async (fromDocId, toDocId) => {
+        if (!db || !userId || !appId) return;
+
+        try {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${fromDocId}`);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                const docData = docSnap.data();
+                const currentLinks = docData.linkedPages || [];
+                
+                if (!currentLinks.includes(toDocId)) {
+                    await updateDoc(docRef, {
+                        linkedPages: [...currentLinks, toDocId],
+                        updatedAt: new Date()
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error updating document links:', error);
+        }
+    };
+
+    const fetchDocumentBacklinks = useCallback(async (docId) => {
+        if (!db || !userId || !appId || !docId) return;
+
+        try {
+            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
+            const snapshot = await getDocs(notesRef);
+            
+            const backlinks = [];
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                if (data.linkedPages && data.linkedPages.includes(docId)) {
+                    backlinks.push({
+                        id: doc.id,
+                        title: data.title || 'Untitled',
+                        updatedAt: data.updatedAt
+                    });
+                }
+            });
+            
+            setDocumentBacklinks(backlinks);
+        } catch (error) {
+            console.error('Error fetching backlinks:', error);
+        }
+    }, [db, userId, appId]);
+
+    // Update all document titles for autocomplete
+    useEffect(() => {
+        if (documents.length > 0) {
+            const titles = documents.map(doc => ({
+                id: doc.id,
+                title: doc.title || 'Untitled'
+            }));
+            setAllDocumentTitles(titles);
+        }
+    }, [documents]);
+
+    // Fetch backlinks when document changes
+    useEffect(() => {
+        if (currentDocumentId) {
+            fetchDocumentBacklinks(currentDocumentId);
+        }
+    }, [currentDocumentId, fetchDocumentBacklinks]);
+
+    // Handle internal link clicks
+    const handleInternalLinkClick = useCallback((e) => {
+        if (e.target.matches('a[data-internal-link-id]')) {
+            e.preventDefault();
+            const targetDocId = e.target.getAttribute('data-internal-link-id');
+            if (targetDocId && targetDocId !== currentDocumentId) {
+                handleDocumentSelect(targetDocId);
+            }
+        }
+    }, [currentDocumentId, handleDocumentSelect]);
+
+    // Add click listener for internal links
+    useEffect(() => {
+        const editorElement = editorElementRef.current;
+        if (editorElement) {
+            editorElement.addEventListener('click', handleInternalLinkClick);
+            return () => {
+                editorElement.removeEventListener('click', handleInternalLinkClick);
+            };
+        }
+    }, [handleInternalLinkClick]);
 
     // Icon picker functionality
     const getFilteredEmojis = () => {
@@ -3062,6 +3303,7 @@ Return only the expanded text without any additional commentary.`;
             order: Date.now(), // Use timestamp for initial ordering
             icon: '',
             coverImage: '',
+            linkedPages: [],
             createdAt: new Date(),
             updatedAt: new Date()
         };
@@ -4982,6 +5224,39 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         </div>
                     )}
 
+                    {/* Feature 2: Internal Link Autocomplete */}
+                    {linkAutocomplete.visible && linkAutocomplete.suggestions.length > 0 && (
+                        <div 
+                            className={`fixed rounded-md shadow-lg border max-w-xs z-10000
+                                ${isDarkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}
+                            style={{
+                                left: linkAutocomplete.x,
+                                top: linkAutocomplete.y,
+                                fontSize: '14px'
+                            }}
+                        >
+                            <div className={`px-2 py-1 text-xs font-medium border-b ${isDarkMode ? 'text-gray-400 border-gray-600' : 'text-gray-500 border-gray-200'}`}>
+                                Link to page
+                            </div>
+                            {linkAutocomplete.suggestions.map((doc, index) => (
+                                <button
+                                    key={doc.id}
+                                    onClick={() => insertInternalLink(doc)}
+                                    className={`w-full text-left px-3 py-2 text-sm transition-colors duration-150 flex items-center gap-2
+                                        ${index === linkAutocomplete.selectedIndex 
+                                            ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
+                                            : (isDarkMode ? 'text-gray-200 hover:bg-gray-700' : 'text-gray-800 hover:bg-gray-100')
+                                        }`}
+                                >
+                                    <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                    </svg>
+                                    <span className="truncate">{doc.title}</span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
                     </div>
@@ -5329,6 +5604,35 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         </div>
                     )}
                 </div>
+
+                {/* Feature 2: Document Backlinks */}
+                {currentDocumentId && documentBacklinks.length > 0 && (
+                    <div className={`mb-4 p-3 rounded-md border ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
+                        <h4 className={`text-sm font-medium mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                            </svg>
+                            Backlinks ({documentBacklinks.length})
+                        </h4>
+                        <div className="space-y-1">
+                            {documentBacklinks.map((backlink) => (
+                                <button
+                                    key={backlink.id}
+                                    onClick={() => handleDocumentSelect(backlink.id)}
+                                    className={`w-full text-left p-2 rounded-md text-sm transition-colors duration-200 flex items-center gap-2
+                                        ${isDarkMode ? 'text-gray-300 hover:bg-gray-600' : 'text-gray-700 hover:bg-gray-100'}
+                                    `}
+                                >
+                                    <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                    </svg>
+                                    <span className="truncate">{backlink.title}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 <button
                     onClick={() => askLlm()}
                     className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
@@ -5535,6 +5839,18 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                 .simple-rich-editor p {
                     margin: 8px 0;
                     color: ${isDarkMode ? '#e5e7eb' : '#1f2937'};
+                }
+                
+                /* Internal Link Styles */
+                .internal-link {
+                    color: ${isDarkMode ? '#60a5fa' : '#3b82f6'} !important;
+                    text-decoration: underline !important;
+                    cursor: pointer !important;
+                    transition: color 0.2s ease !important;
+                }
+                
+                .internal-link:hover {
+                    color: ${isDarkMode ? '#93c5fd' : '#1d4ed8'} !important;
                 }
                 
                 .simple-rich-editor strong {
