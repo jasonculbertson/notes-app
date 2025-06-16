@@ -1200,7 +1200,8 @@ const App = () => {
                                 downloadURL: downloadURL,
                                 extractedContent: extractedContent,
                                 uploadedAt: new Date(),
-                                contentExtracted: extractContent
+                                contentExtracted: extractContent && extractedContent.length > 0,
+                                processingStatus: file.type.includes('pdf') ? 'pending' : 'completed'
                             };
                             
                             const fileDocRef = doc(collection(db, `artifacts/${appId}/users/${userId}/uploaded_files`));
@@ -1316,11 +1317,11 @@ const App = () => {
                 return text;
             }
             
-            // Handle PDF files (basic extraction - client-side)
+            // Handle PDF files (server-side extraction via Cloud Function)
             if (fileType.includes('pdf') || fileName.endsWith('.pdf')) {
-                setFileContentProcessingProgress(`Extracting text from PDF: ${file.name}...`);
-                // For now, return a placeholder - PDF extraction requires additional libraries
-                return `[PDF FILE: ${file.name}]\nThis PDF file has been uploaded but text extraction is not yet implemented. The file contains ${Math.round(file.size / 1024)}KB of data.`;
+                setFileContentProcessingProgress(`PDF uploaded. Text extraction will be processed automatically...`);
+                // Return empty string - Cloud Function will populate extractedContent
+                return '';
             }
             
             // Handle Word documents
@@ -4578,8 +4579,14 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                             </div>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                                                 {formatFileSize(file.fileSize)}
-                                                {file.contentExtracted && (
+                                                {file.processingStatus === 'pending' && (
+                                                    <span className="ml-2 text-yellow-600">• Processing...</span>
+                                                )}
+                                                {file.processingStatus === 'completed' && file.contentExtracted && (
                                                     <span className="ml-2 text-green-600">• AI Ready</span>
+                                                )}
+                                                {file.processingStatus === 'failed' && (
+                                                    <span className="ml-2 text-red-600">• Processing Failed</span>
                                                 )}
                                             </div>
                                         </div>

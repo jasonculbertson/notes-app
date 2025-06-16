@@ -1,0 +1,74 @@
+[debug] [2025-06-16T02:21:17.445Z] ----------------------------------------------------------------------
+[debug] [2025-06-16T02:21:17.447Z] Command:       /opt/homebrew/Cellar/node/23.10.0_1/bin/node /opt/homebrew/bin/firebase init functions
+[debug] [2025-06-16T02:21:17.447Z] CLI Version:   14.6.0
+[debug] [2025-06-16T02:21:17.447Z] Platform:      darwin
+[debug] [2025-06-16T02:21:17.447Z] Node Version:  v23.10.0
+[debug] [2025-06-16T02:21:17.447Z] Time:          Sun Jun 15 2025 19:21:17 GMT-0700 (Pacific Daylight Time)
+[debug] [2025-06-16T02:21:17.447Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2025-06-16T02:21:17.448Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2025-06-16T02:21:17.525Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-06-16T02:21:17.525Z] > authorizing via signed-in user (jculbertson@gmail.com)
+[info] 
+     ######## #### ########  ######## ########     ###     ######  ########
+     ##        ##  ##     ## ##       ##     ##  ##   ##  ##       ##
+     ######    ##  ########  ######   ########  #########  ######  ######
+     ##        ##  ##    ##  ##       ##     ## ##     ##       ## ##
+     ##       #### ##     ## ######## ########  ##     ##  ######  ########
+
+You're about to initialize a Firebase project in this directory:
+
+  /Users/jasonculbertson/Documents/GitHub/notes-app
+
+Before we get started, keep in mind:
+
+  * You are initializing within an existing Firebase project directory
+
+[info] 
+=== Project Setup
+[info] 
+[info] First, let's associate this project directory with a Firebase project.
+[info] You can create multiple project aliases by running firebase use --add, 
+[info] but for now we'll just set up a default project.
+[info] 
+[debug] [2025-06-16T02:21:17.526Z] Using project from CLI flag: notes-app-33f99
+[debug] [2025-06-16T02:21:17.526Z] Checked if tokens are valid: false, expires at: 1749418927292
+[debug] [2025-06-16T02:21:17.526Z] Checked if tokens are valid: false, expires at: 1749418927292
+[debug] [2025-06-16T02:21:17.526Z] > refreshing access token with scopes: []
+[debug] [2025-06-16T02:21:17.527Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2025-06-16T02:21:17.527Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-06-16T02:21:17.644Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2025-06-16T02:21:17.644Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2025-06-16T02:21:17.676Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2025-06-16T02:21:17.676Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2025-06-16T02:21:17.684Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/notes-app-33f99 [none]
+[debug] [2025-06-16T02:21:18.108Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/notes-app-33f99 200
+[debug] [2025-06-16T02:21:18.108Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/notes-app-33f99 {"projectId":"notes-app-33f99","projectNumber":"48692428369","displayName":"Notes App","name":"projects/notes-app-33f99","resources":{"hostingSite":"notes-app-33f99"},"state":"ACTIVE","etag":"1_2f5fc65e-0c5d-4a15-b6db-85174ec3ba19"}
+[info] i  Using project notes-app-33f99 (Notes App) 
+[info] 
+=== Functions Setup
+[debug] [2025-06-16T02:21:18.118Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2025-06-16T02:21:18.118Z] > authorizing via signed-in user (jculbertson@gmail.com)
+[debug] [2025-06-16T02:21:18.118Z] [iam] checking project notes-app-33f99 for permissions ["firebase.projects.get"]
+[debug] [2025-06-16T02:21:18.119Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.119Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.119Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/notes-app-33f99:testIamPermissions [none]
+[debug] [2025-06-16T02:21:18.119Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/notes-app-33f99:testIamPermissions x-goog-quota-user=projects/notes-app-33f99
+[debug] [2025-06-16T02:21:18.119Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/notes-app-33f99:testIamPermissions {"permissions":["firebase.projects.get"]}
+[debug] [2025-06-16T02:21:18.339Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/notes-app-33f99:testIamPermissions 200
+[debug] [2025-06-16T02:21:18.339Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/notes-app-33f99:testIamPermissions {"permissions":["firebase.projects.get"]}
+[debug] [2025-06-16T02:21:18.340Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.340Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.340Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.340Z] Checked if tokens are valid: true, expires at: 1750044076676
+[debug] [2025-06-16T02:21:18.340Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/cloudfunctions.googleapis.com [none]
+[debug] [2025-06-16T02:21:18.340Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/cloudfunctions.googleapis.com x-goog-quota-user=projects/notes-app-33f99
+[debug] [2025-06-16T02:21:18.342Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/runtimeconfig.googleapis.com [none]
+[debug] [2025-06-16T02:21:18.342Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/runtimeconfig.googleapis.com x-goog-quota-user=projects/notes-app-33f99
+[debug] [2025-06-16T02:21:18.768Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/runtimeconfig.googleapis.com 200
+[debug] [2025-06-16T02:21:18.769Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/runtimeconfig.googleapis.com [omitted]
+[debug] [2025-06-16T02:21:18.779Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/cloudfunctions.googleapis.com 200
+[debug] [2025-06-16T02:21:18.779Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/notes-app-33f99/services/cloudfunctions.googleapis.com [omitted]
+[info] 
+Detected existing codebase(s): default
+

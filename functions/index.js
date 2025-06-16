@@ -31,9 +31,8 @@ initializeApp();
 
 /**
  * Cloud Function that triggers when a file is uploaded to Firebase Storage
- * Handles PDF files uploaded to user_uploads/{userId}/uploaded_docs/{fileName}
+ * Handles PDF files uploaded to artifacts/{appId}/users/{userId}/files/
  * Extracts text from PDFs and saves it back to Firestore
- * Uses the default bucket (us-west1)
  */
 exports.extractPdfText = onObjectFinalized(async (event) => {
   const object = event.data;
@@ -46,40 +45,49 @@ exports.extractPdfText = onObjectFinalized(async (event) => {
     structuredData: true,
   });
 
-  // Only process PDF files in the correct path
+  // Only process PDF files
   if (!contentType || contentType !== "application/pdf") {
     logger.info("File is not a PDF, skipping", {filePath});
     return null;
   }
 
-  if (!filePath.includes("user_uploads/") ||
-      !filePath.includes("/uploaded_docs/")) {
+  // Check if file is in the correct path
+  const hasArtifacts = filePath.includes("artifacts/");
+  const hasUsers = filePath.includes("/users/");
+  const hasFiles = filePath.includes("/files/");
+  if (!hasArtifacts || !hasUsers || !hasFiles) {
     logger.info("File is not in the expected upload path, skipping",
         {filePath});
     return null;
   }
 
   try {
-    // Parse the file path to extract userId and fileName
+    // Parse the file path: artifacts/{appId}/users/{userId}/files/{file}
     const pathParts = filePath.split("/");
-    if (pathParts.length < 4) {
+    if (pathParts.length < 5) {
       logger.error("Invalid file path structure", {filePath});
       return null;
     }
 
-    const userId = pathParts[1];
-    const fileName = pathParts[pathParts.length - 1];
+    const appId = pathParts[1];
+    const userId = pathParts[3];
+    const fullFileName = pathParts[pathParts.length - 1];
+
+    // Extract original filename (remove timestamp prefix)
+    const originalFileName = fullFileName.includes("_") ?
+      fullFileName.substring(fullFileName.indexOf("_") + 1) : fullFileName;
 
     logger.info("Processing PDF for user", {
+      appId: appId,
       userId: userId,
-      fileName: fileName,
+      fullFileName: fullFileName,
+      originalFileName: originalFileName,
       structuredData: true,
     });
 
-    // Download the file from Storage (default bucket)
+    // Download the file from Storage
     const bucket = getStorage().bucket();
     const file = bucket.file(filePath);
-    const storageFileName = filePath.split('/').pop();
 
     logger.info("Downloading PDF file...");
     const [fileBuffer] = await file.download();
@@ -101,55 +109,51 @@ exports.extractPdfText = onObjectFinalized(async (event) => {
 
     // Find the corresponding Firestore document
     const db = getFirestore();
-    const uploadedFilesRef = db.collection("artifacts");
-    const snapshot = await uploadedFilesRef.get();
+    const collectionPath = `artifacts/${appId}/users/${userId}/uploaded_files`;
+    const userFilesRef = db.collection(collectionPath);
+    const userFilesSnapshot = await userFilesRef.get();
 
     let documentUpdated = false;
 
-    // Look through all app collections for the matching file
-    for (const appDoc of snapshot.docs) {
-      const appId = appDoc.id;
-      const userFilesRef = db.collection(
-          `artifacts/${appId}/users/${userId}/uploaded_files`);
-      const userFilesSnapshot = await userFilesRef.get();
+    for (const fileDoc of userFilesSnapshot.docs) {
+      const fileData = fileDoc.data();
 
-      for (const fileDoc of userFilesSnapshot.docs) {
-        const fileData = fileDoc.data();
+      // Match by fileName or downloadURL containing the file
+      const matchesFileName = fileData.fileName === originalFileName;
+      const matchesUrl = fileData.downloadURL &&
+        fileData.downloadURL.includes(fullFileName);
 
-        // Match by storageFileName (best), or fallback to downloadURL
-        if (
-          fileData.storageFileName === storageFileName ||
-          (fileData.downloadURL && fileData.downloadURL.includes(storageFileName))
-        ) {
-          logger.info("Found matching Firestore document", {
-            appId: appId,
-            userId: userId,
-            docId: fileDoc.id,
-            structuredData: true,
-          });
+      if (matchesFileName || matchesUrl) {
+        logger.info("Found matching Firestore document", {
+          appId: appId,
+          userId: userId,
+          docId: fileDoc.id,
+          fileName: fileData.fileName,
+          structuredData: true,
+        });
 
-          // Update the document with extracted text
-          await fileDoc.ref.update({
-            extractedContent: extractedText,
-            contentExtracted: true,
-            lastProcessed: new Date(),
-            textExtractionDate: new Date(),
-            pageCount: pdfData.numpages,
-          });
+        // Update the document with extracted text
+        await fileDoc.ref.update({
+          extractedContent: extractedText,
+          contentExtracted: true,
+          lastProcessed: new Date(),
+          textExtractionDate: new Date(),
+          pageCount: pdfData.numpages,
+          processingStatus: "completed",
+        });
 
-          documentUpdated = true;
-          logger.info("Successfully updated Firestore document");
-          break;
-        }
+        documentUpdated = true;
+        logger.info("Successfully updated Firestore document");
+        break;
       }
-
-      if (documentUpdated) break;
     }
 
     if (!documentUpdated) {
       logger.warn("Could not find matching Firestore document for file", {
-        fileName: fileName,
+        originalFileName: originalFileName,
+        fullFileName: fullFileName,
         userId: userId,
+        appId: appId,
         structuredData: true,
       });
     }
@@ -166,30 +170,30 @@ exports.extractPdfText = onObjectFinalized(async (event) => {
     // Try to update the Firestore document with error status
     try {
       const pathParts = filePath.split("/");
-      const userIdFromPath = pathParts[1];
-      const fileNameFromPath = pathParts[pathParts.length - 1];
+      const appId = pathParts[1];
+      const userId = pathParts[3];
+      const fullFileName = pathParts[pathParts.length - 1];
+      const originalFileName = fullFileName.includes("_") ?
+        fullFileName.substring(fullFileName.indexOf("_") + 1) : fullFileName;
 
       const db = getFirestore();
-      const uploadedFilesRef = db.collection("artifacts");
-      const snapshot = await uploadedFilesRef.get();
+      const collectionPath =
+        `artifacts/${appId}/users/${userId}/uploaded_files`;
+      const userFilesRef = db.collection(collectionPath);
+      const userFilesSnapshot = await userFilesRef.get();
 
-      for (const appDoc of snapshot.docs) {
-        const appId = appDoc.id;
-        const userFilesRef = db.collection(
-            `artifacts/${appId}/users/${userIdFromPath}/uploaded_files`);
-        const userFilesSnapshot = await userFilesRef.get();
+      for (const fileDoc of userFilesSnapshot.docs) {
+        const fileData = fileDoc.data();
 
-        for (const fileDoc of userFilesSnapshot.docs) {
-          const fileData = fileDoc.data();
-
-          if (fileData.fileName === fileNameFromPath) {
-            await fileDoc.ref.update({
-              contentExtracted: false,
-              extractionError: error.message,
-              lastProcessed: new Date(),
-            });
-            break;
-          }
+        if (fileData.fileName === originalFileName) {
+          await fileDoc.ref.update({
+            contentExtracted: false,
+            extractionError: error.message,
+            lastProcessed: new Date(),
+            processingStatus: "failed",
+          });
+          logger.info("Updated document with error status");
+          break;
         }
       }
     } catch (updateError) {
