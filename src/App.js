@@ -1904,12 +1904,26 @@ const App = () => {
                     setCurrentDocumentTags(data.tags || []);
                     setCurrentDocumentIcon(data.icon || '');
                     setCurrentDocumentCoverImage(data.coverImage || '');
+                    
+                    // Update the last saved state to prevent unnecessary saves on load
+                    lastSavedStateRef.current = {
+                        content: content || '',
+                        title: data.title || 'Untitled',
+                        tags: [...(data.tags || [])].sort()
+                    };
                 } else {
                     setCurrentDocumentContent('');
                     setCurrentDocumentTitle('Untitled');
                     setCurrentDocumentTags([]);
                     setCurrentDocumentIcon('');
                     setCurrentDocumentCoverImage('');
+                    
+                    // Update the last saved state for new documents
+                    lastSavedStateRef.current = {
+                        content: '',
+                        title: 'Untitled',
+                        tags: []
+                    };
                 }
             } catch (error) {
                 console.error("Error fetching document content:", error);
@@ -2186,7 +2200,14 @@ const App = () => {
         }
     }, [llmResponse]);
 
-    // Autosave mechanism
+    // Track the last saved state to detect actual changes
+    const lastSavedStateRef = useRef({
+        content: '',
+        title: '',
+        tags: []
+    });
+
+    // Autosave mechanism with change detection
     useEffect(() => {
         if (!isAuthReady || !db || !userId || !currentDocumentId || !appId) {
             return;
@@ -2194,6 +2215,26 @@ const App = () => {
 
         // Don't trigger save if content is empty on initial load
         if (!currentDocumentContent && !currentDocumentTitle && currentDocumentTags.length === 0) {
+            return;
+        }
+
+        // Check if there are actual changes compared to last saved state
+        const currentState = {
+            content: currentDocumentContent || '',
+            title: currentDocumentTitle || 'Untitled',
+            tags: [...currentDocumentTags].sort() // Sort for consistent comparison
+        };
+
+        const lastSavedState = lastSavedStateRef.current;
+        const hasChanges = (
+            currentState.content !== lastSavedState.content ||
+            currentState.title !== lastSavedState.title ||
+            JSON.stringify(currentState.tags) !== JSON.stringify(lastSavedState.tags)
+        );
+
+        if (!hasChanges) {
+            // No changes detected, don't save
+            setSaveStatus('All changes saved');
             return;
         }
 
@@ -2212,10 +2253,16 @@ const App = () => {
                     tags: currentDocumentTags,
                     updatedAt: new Date()
                 });
-                setSaveStatus('All changes saved');
                 
-                // Don't reload the content after save to prevent cursor jumping
-                console.log("Document saved without triggering content reload");
+                // Update the last saved state after successful save
+                lastSavedStateRef.current = {
+                    content: currentDocumentContent || '',
+                    title: currentDocumentTitle || 'Untitled',
+                    tags: [...currentDocumentTags].sort()
+                };
+                
+                setSaveStatus('All changes saved');
+                console.log("Document saved with actual changes detected");
             } catch (e) {
                 setSaveStatus('Save error!');
                 console.error("Error autosaving document: ", e);
