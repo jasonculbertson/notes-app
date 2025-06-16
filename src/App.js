@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { getStorage, ref, uploadBytes, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
 
 // Main App component
@@ -1085,6 +1085,154 @@ const App = () => {
         }
     }, [db, userId, appId, currentDocumentId, sanitizeHtml, convertEditorJsonToHtml]);
 
+    // Phase 2: File Upload and Analysis Functions
+    const uploadAndAnalyzeFile = useCallback(async (file, extractContent = true) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot upload file: missing db, userId, or appId");
+            return { success: false, error: "Database not initialized" };
+        }
+        
+        try {
+            // Upload file to Firebase Storage
+            const storage = getStorage();
+            const fileRef = ref(storage, `artifacts/${appId}/users/${userId}/files/${Date.now()}_${file.name}`);
+            
+            setIsUploadingFile(true);
+            setFileUploadProgress(`Uploading ${file.name}...`);
+            
+            const uploadTask = uploadBytesResumable(fileRef, file);
+            
+            return new Promise((resolve) => {
+                uploadTask.on('state_changed',
+                    (snapshot) => {
+                        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+                        setFileUploadProgress(`Uploading ${file.name}: ${Math.round(progress)}%`);
+                    },
+                    (error) => {
+                        console.error('Upload error:', error);
+                        setIsUploadingFile(false);
+                        setFileUploadProgress('');
+                        resolve({ success: false, error: error.message });
+                    },
+                    async () => {
+                        try {
+                            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                            
+                            let extractedContent = '';
+                            if (extractContent) {
+                                setFileUploadProgress(`Extracting content from ${file.name}...`);
+                                extractedContent = await extractFileContent(file, downloadURL);
+                            }
+                            
+                            // Save file metadata to Firestore
+                            const fileData = {
+                                fileName: file.name,
+                                fileSize: file.size,
+                                fileType: file.type,
+                                downloadURL: downloadURL,
+                                extractedContent: extractedContent,
+                                uploadedAt: new Date(),
+                                contentExtracted: extractContent
+                            };
+                            
+                            const fileDocRef = doc(collection(db, `artifacts/${appId}/users/${userId}/uploaded_files`));
+                            await setDoc(fileDocRef, fileData);
+                            
+                            setIsUploadingFile(false);
+                            setFileUploadProgress('');
+                            
+                            console.log("✅ File uploaded and analyzed:", file.name);
+                            resolve({ 
+                                success: true, 
+                                fileId: fileDocRef.id,
+                                fileName: file.name,
+                                extractedContent: extractedContent,
+                                message: `Uploaded and analyzed: ${file.name}`
+                            });
+                        } catch (error) {
+                            console.error('Error saving file metadata:', error);
+                            setIsUploadingFile(false);
+                            setFileUploadProgress('');
+                            resolve({ success: false, error: error.message });
+                        }
+                    }
+                );
+            });
+        } catch (error) {
+            console.error("Error uploading file:", error);
+            setIsUploadingFile(false);
+            setFileUploadProgress('');
+            return { success: false, error: error.message };
+        }
+    }, [db, userId, appId]);
+    
+    const searchFileContent = useCallback(async (searchQuery, fileId = null) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot search files: missing db, userId, or appId");
+            return { success: false, error: "Database not initialized" };
+        }
+        
+        try {
+            // Get uploaded files
+            const filesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/uploaded_files`);
+            const filesSnapshot = await getDocs(filesCollectionRef);
+            
+            let filesToSearch = [];
+            if (fileId) {
+                // Search specific file
+                const fileDoc = filesSnapshot.docs.find(doc => doc.id === fileId);
+                if (fileDoc) {
+                    filesToSearch = [{ id: fileDoc.id, ...fileDoc.data() }];
+                }
+            } else {
+                // Search all files
+                filesToSearch = filesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            }
+            
+            // Filter files that have extracted content
+            const searchableFiles = filesToSearch.filter(file => file.extractedContent);
+            
+            if (searchableFiles.length === 0) {
+                return { 
+                    success: false, 
+                    error: "No files with extracted content found to search" 
+                };
+            }
+            
+            // Perform search
+            const results = [];
+            const queryLower = searchQuery.toLowerCase();
+            
+            for (const file of searchableFiles) {
+                const content = file.extractedContent.toLowerCase();
+                if (content.includes(queryLower)) {
+                    // Find context around the match
+                    const index = content.indexOf(queryLower);
+                    const start = Math.max(0, index - 100);
+                    const end = Math.min(content.length, index + queryLower.length + 100);
+                    const context = file.extractedContent.substring(start, end);
+                    
+                    results.push({
+                        fileId: file.id,
+                        fileName: file.fileName,
+                        fileType: file.fileType,
+                        context: context,
+                        matchIndex: index
+                    });
+                }
+            }
+            
+            return { 
+                success: true, 
+                results: results,
+                message: `Found ${results.length} matches in ${searchableFiles.length} files`
+            };
+        } catch (error) {
+            console.error("Error searching file content:", error);
+            return { success: false, error: error.message };
+        }
+    }, [db, userId, appId]);
+
     // Phase 2: File Content Extraction
     const extractFileContent = useCallback(async (file, downloadURL) => {
         const fileType = file.type.toLowerCase();
@@ -2100,71 +2248,36 @@ Suggested title and icon pairs:`;
         }
     };
 
-    // File Management Functions - Phase 1: File Upload
+    // File Management Functions - Phase 2: Enhanced File Upload with LLM Integration
     const handleFileUpload = async (event) => {
         const files = event.target.files;
         if (!files || files.length === 0) return;
 
-        // Use anonymous userId if none available
-        const activeUserId = userId || 'anonymous-user';
-        console.log('File upload starting with userId:', activeUserId);
-        setIsUploadingFile(true);
-        setFileUploadProgress('Preparing upload...');
-
+        console.log('File upload starting with enhanced analysis');
+        
         try {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
-                setFileUploadProgress(`Uploading ${file.name} (${i + 1}/${files.length})`);
+                setFileUploadProgress(`Processing ${file.name} (${i + 1}/${files.length})`);
 
-                // Create unique filename to avoid collisions
-                const uuid = crypto.randomUUID();
-                const storageFileName = `${file.name}_${uuid}`;
-                const filePath = `user_uploads/${activeUserId}/uploaded_docs/${storageFileName}`;
-
-                // Create storage reference
-                const storageRef = ref(storage, filePath);
-
-                // Upload file
-                await uploadBytes(storageRef, file);
-
-                // Get download URL
-                const downloadURL = await getDownloadURL(storageRef);
-
-                // Phase 2: Extract file content for LLM analysis
-                setFileUploadProgress(`Extracting content from ${file.name}...`);
-                const extractedContent = await extractFileContent(file, downloadURL);
-
-                // Save metadata to Firestore (including extracted content)
-                const fileMetadata = {
-                    fileName: file.name,                // Original file name for display
-                    storageFileName,                    // Actual file name in Storage (for function matching)
-                    fileType: file.type,
-                    fileSize: file.size,
-                    downloadURL: downloadURL,
-                    uploadDate: Timestamp.now(),
-                    associatedPageId: currentDocumentId || null,
-                    // Phase 2: Store extracted content for LLM
-                    extractedContent: extractedContent,
-                    contentExtracted: true,
-                    lastProcessed: Timestamp.now()
-                };
-
-                const docRef = await addDoc(
-                    collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`),
-                    fileMetadata
-                );
-                console.log(`File ${file.name} uploaded with document ID: ${docRef.id}`);
-                console.log(`File ${file.name} uploaded successfully`);
+                // Use our new uploadAndAnalyzeFile function
+                const result = await uploadAndAnalyzeFile(file, true);
+                
+                if (result.success) {
+                    console.log(`✅ File processed successfully: ${result.fileName}`);
+                } else {
+                    console.error(`❌ File processing failed: ${result.error}`);
+                    setSaveStatus(`Error processing ${file.name}: ${result.error}`);
+                }
             }
 
             setFileUploadProgress('Upload complete!');
-            setSaveStatus(`${files.length} file(s) uploaded successfully`);
+            setSaveStatus(`${files.length} file(s) uploaded and analyzed successfully`);
         } catch (error) {
             console.error('Error uploading files:', error);
             setFileUploadProgress('Upload failed');
             setSaveStatus('Error uploading files');
         } finally {
-            setIsUploadingFile(false);
             // Clear the file input
             if (fileInputRef.current) {
                 fileInputRef.current.value = '';
@@ -2819,6 +2932,42 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                         },
                         required: ["htmlContentToAppend"]
                     }
+                },
+                {
+                    name: "uploadAndAnalyzeFile",
+                    description: "Upload a file and extract its content for analysis. Use this when the user wants to upload a document, PDF, or text file.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            fileName: {
+                                type: "STRING",
+                                description: "The name of the file to upload"
+                            },
+                            extractContent: {
+                                type: "BOOLEAN",
+                                description: "Whether to extract and analyze the file content (default: true)"
+                            }
+                        },
+                        required: ["fileName"]
+                    }
+                },
+                {
+                    name: "searchFileContent",
+                    description: "Search through uploaded file contents. Use this when the user wants to find information in their uploaded files.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            searchQuery: {
+                                type: "STRING",
+                                description: "The text to search for in uploaded files"
+                            },
+                            fileId: {
+                                type: "STRING",
+                                description: "Optional specific file ID to search in. If not provided, searches all files"
+                            }
+                        },
+                        required: ["searchQuery"]
+                    }
                 }
             ]
         }];
@@ -2883,6 +3032,21 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                                     responseText += `✅ Added content to document. `;
                                 } else {
                                     responseText += `❌ Failed to add content: ${result.error}. `;
+                                }
+                            } else if (functionName === 'uploadAndAnalyzeFile') {
+                                responseText += `📁 File upload functionality requires user interaction. Please use the file upload button in the interface. `;
+                            } else if (functionName === 'searchFileContent') {
+                                result = await searchFileContent(
+                                    functionArgs.searchQuery,
+                                    functionArgs.fileId
+                                );
+                                if (result.success) {
+                                    responseText += `🔍 Found ${result.results.length} matches in uploaded files. `;
+                                    if (result.results.length > 0) {
+                                        responseText += `Results: ${result.results.map(r => `${r.fileName}: "${r.context.substring(0, 100)}..."`).join('; ')}`;
+                                    }
+                                } else {
+                                    responseText += `❌ Search failed: ${result.error}. `;
                                 }
                             }
                             
@@ -4443,16 +4607,6 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
                 )}
-                
-                {/* AI Capabilities Hint */}
-                <div className={`mt-3 p-2 rounded-md text-xs ${isDarkMode ? 'bg-blue-900/30 text-blue-200' : 'bg-blue-50 text-blue-700'}`}>
-                    <p className="font-medium mb-1">💡 AI can now:</p>
-                    <ul className="space-y-0.5 text-xs opacity-90">
-                        <li>• Create new documents</li>
-                        <li>• Add content to existing documents</li>
-                        <li>• Answer questions about your notes</li>
-                    </ul>
-                </div>
             </div>
 
             {/* Global CDN and custom styles for scrollbar and Editor.js themes */}
