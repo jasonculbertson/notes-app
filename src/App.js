@@ -1258,13 +1258,24 @@ const App = () => {
                 filesToSearch = filesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             }
             
+            // Debug: Log all files to understand the structure
+            console.log("🔍 Debug: All files to search:", filesToSearch.map(f => ({
+                id: f.id,
+                fileName: f.fileName,
+                hasExtractedContent: !!f.extractedContent,
+                extractedContentLength: f.extractedContent ? f.extractedContent.length : 0,
+                processingStatus: f.processingStatus,
+                allFields: Object.keys(f)
+            })));
+            
             // Filter files that have extracted content
-            const searchableFiles = filesToSearch.filter(file => file.extractedContent);
+            const searchableFiles = filesToSearch.filter(file => file.extractedContent && file.extractedContent.trim().length > 0);
             
             if (searchableFiles.length === 0) {
+                console.log("🔍 Debug: No searchable files found. Total files:", filesToSearch.length);
                 return { 
                     success: false, 
-                    error: "No files with extracted content found to search" 
+                    error: `No files with extracted content found to search. Found ${filesToSearch.length} total files, but none have extractedContent.` 
                 };
             }
             
@@ -5648,15 +5659,11 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                     onClick={() => askLlm()}
                     className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
                         disabled:opacity-50 disabled:cursor-not-allowed`}
-                    disabled={llmLoading || documents.length === 0 || llmQuestion.trim().length < 3}
+                    disabled={llmLoading || documents.length === 0}
                 >
                     Generate Response
                 </button>
-                {llmQuestion.trim().length > 0 && llmQuestion.trim().length < 3 && (
-                    <p className={`text-xs mt-1 text-center ${isDarkMode ? 'text-yellow-300' : 'text-yellow-600'}`}>
-                        Please enter at least 3 characters
-                    </p>
-                )}
+
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
                 )}
