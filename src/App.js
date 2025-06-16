@@ -4442,7 +4442,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                             </div>
                             
                             {/* Document Icon and Title */}
-                            <div className="flex items-center mb-6 pr-32">
+                            <div className="flex items-start mb-6 pr-32">
                                 {currentDocumentIcon && (
                                     <button
                                         onClick={() => setShowIconPicker(!showIconPicker)}
