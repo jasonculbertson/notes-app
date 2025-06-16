@@ -2155,12 +2155,34 @@ Suggested title and icon pairs:`;
         }
     };
 
+    // Phase 5: AI Title & Icon Suggestions Handler
+    const handleTriggerAiTitleIconSuggestions = () => {
+        if (!currentDocumentId || !currentDocumentContent) return;
+        const plainTextContent = convertHtmlToPlainText(currentDocumentContent);
+        const prompt = `Based on the following document content, suggest a good title and relevant icon:
+
+DOCUMENT TITLE: ${currentDocumentTitle || 'Untitled'}
+DOCUMENT CONTENT:
+${plainTextContent}
+
+Please analyze the content and suggest an appropriate title and icon.`;
+        
+        askLlm(prompt);
+    };
+
     // Phase 5: AI Tag Suggestions Handler
     const handleTriggerAiTagSuggestions = () => {
-        if (!currentDocumentId) return;
+        if (!currentDocumentId || !currentDocumentContent) return;
         const plainTextContent = convertHtmlToPlainText(currentDocumentContent);
-        // This LLM call should specifically target the "suggestTags" tool
-        askLlm(`Suggest relevant tags for the following document: \n\n${plainTextContent}`);
+        const prompt = `Based on the following document content, suggest relevant tags:
+
+DOCUMENT TITLE: ${currentDocumentTitle || 'Untitled'}
+DOCUMENT CONTENT:
+${plainTextContent}
+
+Please analyze the content and suggest appropriate tags.`;
+        
+        askLlm(prompt);
     };
 
     // Icon picker functionality
@@ -4878,7 +4900,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                 {currentDocumentId && (
                                     <button
                                         onClick={() => {
-                                            askLlm("Suggest a good title and relevant icon for the current document based on its content.");
+                                            handleTriggerAiTitleIconSuggestions();
                                             setShowPlusOverlay(false);
                                         }}
                                         className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
