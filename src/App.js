@@ -3523,6 +3523,31 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
                     return linkInfo;
                 }).join('\n\n---\n\n');
 
+                // Get current document information
+                const currentDoc = documents.find(doc => doc.id === currentDocumentId);
+                let currentDocumentInfo = '';
+                if (currentDoc) {
+                    let currentContent = '';
+                    if (currentDoc.content) {
+                        try {
+                            const parsed = JSON.parse(currentDoc.content);
+                            if (parsed.blocks) {
+                                currentContent = convertEditorToPlainText(parsed);
+                            } else {
+                                currentContent = convertHtmlToPlainText(currentDoc.content);
+                            }
+                        } catch (e) {
+                            currentContent = convertHtmlToPlainText(currentDoc.content);
+                        }
+                    }
+                    currentDocumentInfo = `CURRENTLY OPEN DOCUMENT:
+Title: ${currentDoc.title || 'Untitled'}
+Tags: ${(currentDoc.tags || []).join(', ') || 'None'}
+Content: ${currentContent || '(Empty document)'}
+
+`;
+                }
+
                 // Combine documents, files, and Google links
                 const allContent = [documentsText, uploadedFilesText, googleLinksText].filter(text => text.trim()).join('\n\n===== UPLOADED FILES =====\n\n');
 
@@ -3530,7 +3555,7 @@ IMPORTANT: Return your response as a JSON object with exactly this structure:
 
 USER QUESTION: ${question}
 
-USER'S KNOWLEDGE BASE:
+${currentDocumentInfo}USER'S KNOWLEDGE BASE:
 ${allContent}
 
 Instructions:
@@ -3541,6 +3566,7 @@ Instructions:
 5. **For research topics**: CREATE comprehensive documents with your knowledge using createNewDocument
 6. **Be proactive**: When users ask about ANY topic, create a document about it
 7. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags
+8. **Context awareness**: When users refer to "this page", "the current document", "this document", "the one that is open now", or similar phrases, they mean the currently open document shown above
 
 CRITICAL: When a user asks to "create a document about X" or asks about any topic, you MUST call the createNewDocument function. Do not just say you will create it - actually call the function.
 
@@ -3567,6 +3593,31 @@ RESPONSE FORMAT:
                 // Continuing conversation - use recent history with system context
                 const recentHistory = newChatHistory.slice(-8); // Last 8 messages
                 
+                // Get current document information for continuing conversations
+                const currentDoc = documents.find(doc => doc.id === currentDocumentId);
+                let currentDocumentInfo = '';
+                if (currentDoc) {
+                    let currentContent = '';
+                    if (currentDoc.content) {
+                        try {
+                            const parsed = JSON.parse(currentDoc.content);
+                            if (parsed.blocks) {
+                                currentContent = convertEditorToPlainText(parsed);
+                            } else {
+                                currentContent = convertHtmlToPlainText(currentDoc.content);
+                            }
+                        } catch (e) {
+                            currentContent = convertHtmlToPlainText(currentDoc.content);
+                        }
+                    }
+                    currentDocumentInfo = `
+
+CURRENTLY OPEN DOCUMENT:
+Title: ${currentDoc.title || 'Untitled'}
+Tags: ${(currentDoc.tags || []).join(', ') || 'None'}
+Content: ${currentContent || '(Empty document)'}`;
+                }
+
                 // Add system context for continuing conversations
                 const systemMessage = {
                     role: "user",
@@ -3578,13 +3629,14 @@ CRITICAL INSTRUCTIONS:
 - When users ask to add content, you MUST call the appendContentToDocument function
 - Never just say you will create something - actually call the function
 - Use comprehensive HTML content with proper formatting
+- When users refer to "this page", "the current document", "this document", or "the one that is open now", they mean the currently open document shown below
 
 AVAILABLE FUNCTIONS:
 - createNewDocument: MUST use for any document creation requests
 - appendContentToDocument: MUST use for adding content to documents
 - searchFileContent: Use to search uploaded files
 
-Be proactive and actually CREATE documents when users ask about topics, don't just describe what you would create.`
+Be proactive and actually CREATE documents when users ask about topics, don't just describe what you would create.${currentDocumentInfo}`
                     }]
                 };
                 
