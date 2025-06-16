@@ -1969,6 +1969,29 @@ const App = () => {
         }
     }, [allDocumentTitles, currentDocumentId]);
 
+    const updateDocumentLinks = useCallback(async (fromDocId, toDocId) => {
+        if (!db || !userId || !appId) return;
+
+        try {
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${fromDocId}`);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                const docData = docSnap.data();
+                const currentLinks = docData.linkedPages || [];
+                
+                if (!currentLinks.includes(toDocId)) {
+                    await updateDoc(docRef, {
+                        linkedPages: [...currentLinks, toDocId],
+                        updatedAt: new Date()
+                    });
+                }
+            }
+        } catch (error) {
+            console.error('Error updating document links:', error);
+        }
+    }, [db, userId, appId]);
+
     const insertInternalLink = useCallback((targetDoc) => {
         try {
             if (!linkAutocomplete.range || !targetDoc) return;
@@ -2006,29 +2029,6 @@ const App = () => {
         }
     }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
 
-    const updateDocumentLinks = async (fromDocId, toDocId) => {
-        if (!db || !userId || !appId) return;
-
-        try {
-            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes/${fromDocId}`);
-            const docSnap = await getDoc(docRef);
-            
-            if (docSnap.exists()) {
-                const docData = docSnap.data();
-                const currentLinks = docData.linkedPages || [];
-                
-                if (!currentLinks.includes(toDocId)) {
-                    await updateDoc(docRef, {
-                        linkedPages: [...currentLinks, toDocId],
-                        updatedAt: new Date()
-                    });
-                }
-            }
-        } catch (error) {
-            console.error('Error updating document links:', error);
-        }
-    };
-
     const fetchDocumentBacklinks = useCallback(async (docId) => {
         if (!db || !userId || !appId || !docId) return;
 
@@ -2060,10 +2060,11 @@ const App = () => {
             e.preventDefault();
             const targetDocId = e.target.getAttribute('data-internal-link-id');
             if (targetDocId && targetDocId !== currentDocumentId) {
-                handleDocumentSelect(targetDocId);
+                // Set the current document to the target document
+                setCurrentDocumentId(targetDocId);
             }
         }
-    }, [currentDocumentId, handleDocumentSelect]);
+    }, [currentDocumentId]);
 
     // Separate useEffect for text selection listeners and internal linking
     useEffect(() => {
@@ -2112,6 +2113,9 @@ const App = () => {
                 case 'Escape':
                     e.preventDefault();
                     setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+                    break;
+                default:
+                    // No action needed for other keys
                     break;
             }
         };
