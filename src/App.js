@@ -117,7 +117,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         border-radius: 6px 6px 0 0;
     `;
     
-    // Create toolbar buttons
+    // Create toolbar buttons (removed indent/outdent as Tab key will handle this)
     const buttons = [
         { text: '↶', command: 'undo', title: 'Undo (Ctrl+Z)' },
         { text: '↷', command: 'redo', title: 'Redo (Ctrl+Y)' },
@@ -130,8 +130,6 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         { text: 'H3', command: 'formatBlock', value: 'h3', title: 'Heading 3' },
         { text: '•', command: 'insertUnorderedList', title: 'Bullet List' },
         { text: '1.', command: 'insertOrderedList', title: 'Numbered List' },
-        { text: '⇥', command: 'indent', title: 'Indent' },
-        { text: '⇤', command: 'outdent', title: 'Outdent' },
         { text: '"', command: 'formatBlock', value: 'blockquote', title: 'Quote' },
         { text: 'P', command: 'formatBlock', value: 'p', title: 'Paragraph' },
         { text: '─', command: 'insertDivider', title: 'Divider' }
@@ -673,6 +671,21 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
     
     // Handle keyboard shortcuts
     editor.onkeydown = (e) => {
+        // Handle Tab key for indent/outdent
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            saveToUndoStack(editor.innerHTML);
+            
+            if (e.shiftKey) {
+                // Shift+Tab = Outdent
+                document.execCommand('outdent');
+            } else {
+                // Tab = Indent
+                document.execCommand('indent');
+            }
+            return;
+        }
+        
         if (e.ctrlKey || e.metaKey) {
             switch(e.key.toLowerCase()) {
                 case 'b':
@@ -5642,7 +5655,7 @@ Answer conversational questions directly in the chat. Only create documents when
 
                     {/* Title with Icon and Toolbar */}
                     {currentDocumentId && (
-                        <div className="group relative mb-6">
+                        <div className="group relative mb-3">
                             {/* Notion-like Hover Toolbar - Positioned to the right of title */}
                             <div className={`absolute top-2 right-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-200 z-50 
                                 px-3 py-2 rounded-lg shadow-lg border
@@ -5697,7 +5710,7 @@ Answer conversational questions directly in the chat. Only create documents when
                             </div>
                             
                             {/* Document Icon and Title */}
-                            <div className="flex items-start mb-6 pr-32">
+                            <div className="flex items-start mb-3 pr-32">
                                 {currentDocumentIcon && (
                                     <button
                                         onClick={() => setShowIconPicker(!showIconPicker)}
@@ -5882,7 +5895,7 @@ Answer conversational questions directly in the chat. Only create documents when
                     {currentDocumentId && (
                         <>
                             {/* Tags input/display - Phase 5: Simplified with plus button AI actions */}
-                            <div ref={tagInputContainerRef} className="flex flex-wrap items-center gap-2 mb-4">
+                            <div ref={tagInputContainerRef} className="flex flex-wrap items-center gap-2 mb-2">
                                 {currentDocumentTags.map((tag, idx) => (
                                     <span key={idx} className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
                                         ${isDarkMode ? 'bg-gray-700 text-gray-300' : 'bg-blue-100 text-blue-800'}
@@ -5902,10 +5915,10 @@ Answer conversational questions directly in the chat. Only create documents when
                                 ))}
                                 <input
                                     type="text"
-                                    className={`flex-grow min-w-[100px] max-w-xs p-1.5 rounded-md text-sm
+                                    className={`flex-grow min-w-[100px] max-w-[200px] p-1.5 rounded-md text-sm
                                         ${isDarkMode ? 'bg-gray-700 text-gray-200 placeholder-gray-400 border-gray-600' : 'bg-gray-50 text-gray-800 placeholder-gray-500 border-gray-300'}
                                         border focus:outline-none focus:ring-1 focus:ring-blue-400`}
-                                    placeholder="Add tag (e.g., 'work, idea') or use + button for AI suggestions"
+                                    placeholder="Add tag"
                                     onKeyPress={(e) => {
                                         if (e.key === 'Enter') {
                                             e.preventDefault(); // Prevent new line in editor
