@@ -2338,7 +2338,7 @@ Respond with only the suggested tags, separated by commas, nothing else.`;
                 contents: [{ role: "user", parts: [{ text: prompt }] }]
             };
 
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
             const response = await fetch(apiUrl, {
                 method: 'POST',
@@ -2420,7 +2420,7 @@ Requirements:
 
 Suggested title and icon pairs:`;
 
-            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3815,7 +3815,7 @@ Answer conversational questions directly in the chat. Only create documents when
             payload.tools = tools;
         }
 
-        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
         setLlmLoadingMessage('Connecting to AI...');
         
@@ -5572,8 +5572,11 @@ Answer conversational questions directly in the chat. Only create documents when
                     {/* Input Field */}
                     <input
                         type="text"
-                        className={`w-full pl-11 pr-20 py-3 border-t focus:outline-none text-sm placeholder-gray-400
-                            ${isDarkMode ? 'bg-gray-800 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
+                        className={`w-full pl-11 pr-20 py-3 border rounded-lg focus:outline-none focus:ring-2 text-sm placeholder-gray-400
+                            ${isDarkMode 
+                                ? 'bg-gray-800 text-gray-200 border-gray-600 focus:ring-blue-500' 
+                                : 'bg-white text-gray-800 border-gray-300 focus:ring-blue-500'
+                            }`}
                         placeholder="Ask AI about your documents or request new content..."
                         value={llmQuestion}
                         onChange={(e) => setLlmQuestion(e.target.value)}
