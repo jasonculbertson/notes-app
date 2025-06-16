@@ -5430,28 +5430,34 @@ Answer conversational questions directly in the chat. Only create documents when
                         </button>
                     )}
                 </div>
-                <div ref={llmResponseRef} className={`flex-grow overflow-y-auto p-3 rounded-md mb-4 custom-scrollbar text-sm leading-relaxed
-                    ${isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-800'}`}>
+                <div ref={llmResponseRef} className={`flex-grow overflow-y-auto mb-4 custom-scrollbar text-sm leading-relaxed
+                    ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
                     {chatHistory.length === 0 ? (
                         <div className={`text-center py-8 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                             Ask a question about your documents here. For example: 'Summarize all my notes.'
                         </div>
                     ) : (
-                        <div className="space-y-4">
+                        <div className="space-y-6">
                             {chatHistory.map((message, index) => (
-                                <div key={index} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                    <div className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                                        message.role === 'user' 
-                                            ? (isDarkMode ? 'bg-blue-600 text-white' : 'bg-blue-500 text-white')
-                                            : (isDarkMode ? 'bg-gray-600 text-gray-100' : 'bg-gray-200 text-gray-800')
-                                    }`}>
-                                        <div className={`text-xs mb-1 opacity-75 ${
-                                            message.role === 'user' ? 'text-right' : 'text-left'
-                                        }`}>
-                                            {message.role === 'user' ? 'You' : 'AI Assistant'}
+                                <div key={index} className="w-full">
+                                    {message.role === 'user' && (
+                                        <div className={`text-xs font-medium mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                            You
                                         </div>
-                                        <div className="whitespace-pre-wrap">{message.parts[0].text}</div>
-                                    </div>
+                                    )}
+                                    {message.role === 'user' && (
+                                        <div className={`w-full p-3 rounded-md mb-4 ${isDarkMode ? 'bg-gray-700' : 'bg-gray-100'}`}>
+                                            <div className="whitespace-pre-wrap">{message.parts[0].text}</div>
+                                        </div>
+                                    )}
+                                    {message.role === 'model' && (
+                                        <>
+                                            <div className={`text-xs font-medium mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                                AI Assistant
+                                            </div>
+                                            <div className="w-full whitespace-pre-wrap">{message.parts[0].text}</div>
+                                        </>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -5548,13 +5554,13 @@ Answer conversational questions directly in the chat. Only create documents when
                     </div>
                 )}
 
-                {/* Chat Input with Plus Button */}
+                {/* AI Input with Plus Button */}
                 <div className="relative mb-3 plus-overlay-container">
                     {/* Plus Button */}
                     <button
                         onClick={handlePlusButtonClick}
-                        className={`absolute left-2 top-1/2 transform -translate-y-1/2 z-10 w-6 h-6 rounded-full flex items-center justify-center transition-colors duration-200
-                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-gray-200 hover:bg-gray-300 text-gray-600'}
+                        className={`absolute left-3 top-1/2 transform -translate-y-1/2 z-10 w-5 h-5 rounded flex items-center justify-center transition-colors duration-200
+                            ${isDarkMode ? 'hover:bg-gray-600 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
                         `}
                         title="Add content, files, or use AI actions"
                     >
@@ -5566,8 +5572,8 @@ Answer conversational questions directly in the chat. Only create documents when
                     {/* Input Field */}
                     <input
                         type="text"
-                        className={`w-full pl-10 pr-3 py-2.5 rounded-md border focus:outline-none focus:ring-1 focus:ring-blue-400 text-sm placeholder-gray-400
-                            ${isDarkMode ? 'bg-gray-700 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
+                        className={`w-full pl-11 pr-20 py-3 border-t focus:outline-none text-sm placeholder-gray-400
+                            ${isDarkMode ? 'bg-gray-800 text-gray-200 border-gray-600' : 'bg-white text-gray-800 border-gray-300'}`}
                         placeholder="Ask AI about your documents or request new content..."
                         value={llmQuestion}
                         onChange={(e) => setLlmQuestion(e.target.value)}
@@ -5578,6 +5584,20 @@ Answer conversational questions directly in the chat. Only create documents when
                         }}
                         disabled={llmLoading || documents.length === 0}
                     />
+
+                    {/* Send Button */}
+                    <button
+                        onClick={askLlm}
+                        className={`absolute right-3 top-1/2 transform -translate-y-1/2 px-3 py-1 text-xs rounded transition-colors duration-200
+                            ${llmQuestion.trim() && !llmLoading && documents.length > 0
+                                ? (isDarkMode ? 'bg-blue-600 hover:bg-blue-500 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white')
+                                : (isDarkMode ? 'bg-gray-600 text-gray-400' : 'bg-gray-300 text-gray-500')
+                            }
+                        `}
+                        disabled={!llmQuestion.trim() || llmLoading || documents.length === 0}
+                    >
+                        {llmLoading ? 'Thinking...' : 'Send'}
+                    </button>
 
                     {/* Plus Button Overlay */}
                     {showPlusOverlay && (
@@ -5754,15 +5774,6 @@ Answer conversational questions directly in the chat. Only create documents when
                         </div>
                     </div>
                 )}
-
-                <button
-                    onClick={() => askLlm()}
-                    className={`w-full px-5 py-2 rounded-md text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 transition-colors duration-200 shadow-sm
-                        disabled:opacity-50 disabled:cursor-not-allowed`}
-                    disabled={llmLoading || documents.length === 0}
-                >
-                    Generate Response
-                </button>
 
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
