@@ -4455,13 +4455,22 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                     </button>
                                 )}
                                 
-                                <input
-                                    type="text"
-                                    className={`flex-1 min-w-0 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2
+                                <textarea
+                                    className={`flex-1 min-w-0 text-4xl font-extrabold bg-transparent border-none focus:outline-none py-2 resize-none overflow-hidden
                                         ${isDarkMode ? 'text-gray-200 placeholder-gray-500' : 'text-gray-900 placeholder-gray-300'}`}
                                     value={currentDocumentTitle}
                                     onChange={(e) => setCurrentDocumentTitle(e.target.value)}
                                     placeholder="New page"
+                                    rows="1"
+                                    style={{
+                                        minHeight: '1.2em',
+                                        lineHeight: '1.2em'
+                                    }}
+                                    onInput={(e) => {
+                                        // Auto-resize textarea to fit content
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = e.target.scrollHeight + 'px';
+                                    }}
                                 />
                             </div>
                             
