@@ -3607,15 +3607,14 @@ ${allContent}
 
 Instructions:
 1. **ALWAYS use function calls for document operations** - Never just describe what you'll do, actually do it
-2. **For document creation requests**: IMMEDIATELY call createNewDocument function with comprehensive HTML content
+2. **For explicit document creation requests**: IMMEDIATELY call createNewDocument function with comprehensive HTML content
 3. **For content addition requests**: IMMEDIATELY call appendContentToDocument function
-4. **For information requests about topics**: CREATE a document about the topic using createNewDocument
-5. **For research topics**: CREATE comprehensive documents with your knowledge using createNewDocument
-6. **Be proactive**: When users ask about ANY topic, create a document about it
-7. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags
-8. **Context awareness**: When users refer to "this page", "the current document", "this document", "the one that is open now", or similar phrases, they mean the currently open document shown above
+4. **For conversational questions**: Provide helpful answers in the chat without creating documents
+5. **For simple information requests**: Answer directly in the chat unless the user specifically asks to save the information
+6. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags when creating documents
+7. **Context awareness**: When users refer to "this page", "the current document", "this document", "the one that is open now", or similar phrases, they mean the currently open document shown above
 
-CRITICAL: When a user asks to "create a document about X" or asks about any topic, you MUST call the createNewDocument function. Do not just say you will create it - actually call the function.
+CRITICAL: Only create documents when the user explicitly asks to "create a document", "make a document", "save this information", or uses similar explicit creation language. For general questions and conversations, provide helpful answers in the chat.
 
 CAPABILITIES:
 - I MUST use createNewDocument function for any document creation
@@ -3625,9 +3624,10 @@ CAPABILITIES:
 - I suggest search terms for additional research
 
 RESPONSE FORMAT: 
-- For document creation: Call createNewDocument function with comprehensive HTML content
-- For content addition: Call appendContentToDocument function with HTML content
-- For information only: Provide a helpful response and suggest search terms for additional research`;
+- For explicit document creation requests: Call createNewDocument function with comprehensive HTML content
+- For content addition requests: Call appendContentToDocument function with HTML content
+- For general questions and conversations: Provide helpful answers directly in the chat
+- For information requests: Answer in the chat and optionally suggest search terms for additional research`;
 
                 // Include recent chat history (last 8 messages to manage token usage)
                 const recentHistory = newChatHistory.slice(-1);
@@ -3672,18 +3672,19 @@ Content: ${currentContent || '(Empty document)'}`;
                         text: `You are a helpful AI assistant with document creation capabilities. 
 
 CRITICAL INSTRUCTIONS:
-- When users ask to "create a document" or ask about any topic, you MUST call the createNewDocument function
+- Only create documents when users explicitly ask to "create a document", "make a document", "save this information", or use similar explicit creation language
 - When users ask to add content, you MUST call the appendContentToDocument function
-- Never just say you will create something - actually call the function
-- Use comprehensive HTML content with proper formatting
+- For general questions and conversations, provide helpful answers directly in the chat
+- Never just say you will create something - actually call the function when explicitly requested
+- Use comprehensive HTML content with proper formatting when creating documents
 - When users refer to "this page", "the current document", "this document", or "the one that is open now", they mean the currently open document shown below
 
 AVAILABLE FUNCTIONS:
-- createNewDocument: MUST use for any document creation requests
-- appendContentToDocument: MUST use for adding content to documents
+- createNewDocument: Use ONLY for explicit document creation requests
+- appendContentToDocument: Use for adding content to documents
 - searchFileContent: Use to search uploaded files
 
-Be proactive and actually CREATE documents when users ask about topics, don't just describe what you would create.${currentDocumentInfo}`
+Answer conversational questions directly in the chat. Only create documents when explicitly requested.${currentDocumentInfo}`
                     }]
                 };
                 
@@ -3696,7 +3697,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
             function_declarations: [
                 {
                     name: "createNewDocument",
-                    description: "Create a new document with HTML content. Use this when the user asks to create a document, wants information about a topic (create a research document), or when you want to provide comprehensive information that would be useful as a saved document.",
+                    description: "Create a new document with HTML content. Use this ONLY when the user explicitly asks to create a document, make a document, or save information as a document. Do NOT use for general questions or conversations.",
                     parameters: {
                         type: "OBJECT",
                         properties: {
