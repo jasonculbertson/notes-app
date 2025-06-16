@@ -718,6 +718,17 @@ const App = () => {
     const [selectedTextPosition, setSelectedTextPosition] = useState({ x: 0, y: 0 });
     const [openOverflowMenu, setOpenOverflowMenu] = useState(null); // Track which node's overflow menu is open
 
+    // Feature 1: AI Content Transformation - State Management
+    const [aiTransformToolbar, setAiTransformToolbar] = useState({
+        visible: false,
+        x: 0,
+        y: 0,
+        selectedText: '',
+        selectedRange: null
+    });
+    const [aiTransformLoading, setAiTransformLoading] = useState(false);
+    const [aiTransformLoadingMessage, setAiTransformLoadingMessage] = useState('');
+
     // File Management States - Phase 1: File Upload
     const [uploadedFiles, setUploadedFiles] = useState([]);
     const [isUploadingFile, setIsUploadingFile] = useState(false);
@@ -769,7 +780,7 @@ const App = () => {
         }
     }, [aiTagSuggestions]);
 
-    // Handle text selection for contextual Q&A - Moved early to avoid hoisting issues
+    // Handle text selection for contextual Q&A and AI Transformation - Moved early to avoid hoisting issues
     const handleTextSelection = useCallback(() => {
         console.log("Text selection handler triggered");
         
@@ -807,6 +818,26 @@ const App = () => {
                                 y: Math.max(50, rect.top - 60) // Position above selection with margin
                             });
                             setShowSelectedTextMenu(true);
+                            
+                            // Feature 1: AI Transformation Toolbar - Show with delay to avoid flicker
+                            setTimeout(() => {
+                                // Double-check selection is still valid
+                                const currentSelection = window.getSelection();
+                                if (currentSelection.toString().trim().length > 3) {
+                                    const currentRange = currentSelection.rangeCount > 0 ? currentSelection.getRangeAt(0) : null;
+                                    if (currentRange) {
+                                        const currentRect = currentRange.getBoundingClientRect();
+                                        setAiTransformToolbar({
+                                            visible: true,
+                                            x: currentRect.left + (currentRect.width / 2) - 60, // Center toolbar (assuming ~120px width)
+                                            y: currentRect.top - 40, // Position above selection
+                                            selectedText: currentSelection.toString().trim(),
+                                            selectedRange: currentRange.cloneRange() // Store a copy of the range
+                                        });
+                                    }
+                                }
+                            }, 200); // 200ms delay to prevent flicker
+                            
                             console.log("Showing selected text menu at position:", {
                                 x: rect.left + (rect.width / 2),
                                 y: rect.top - 60
@@ -823,9 +854,10 @@ const App = () => {
                 console.log("Selection too short or no range:", selectedTextContent.length);
             }
             
-            // Hide menu if no valid selection
+            // Hide menus if no valid selection
             setShowSelectedTextMenu(false);
             setSelectedText('');
+            setAiTransformToolbar(prev => ({ ...prev, visible: false }));
         }, 50); // Slightly longer delay to ensure selection is complete
     }, []); // No dependencies needed since we're using state setters directly
 
@@ -2253,6 +2285,145 @@ Please analyze the content and suggest 3-5 relevant tags. Respond with a JSON ar
             }
         } catch (error) {
             console.error('Error getting AI tag suggestions:', error);
+        }
+    };
+
+    // Feature 1: AI Content Transformation Handlers
+    const handleAiTransform = async (transformType) => {
+        if (!aiTransformToolbar.selectedText || !aiTransformToolbar.selectedRange) {
+            console.error('No text selected for transformation');
+            return;
+        }
+
+        setAiTransformLoading(true);
+        setAiTransformLoadingMessage(`${transformType.charAt(0).toUpperCase() + transformType.slice(1)}ing text...`);
+        
+        // Hide the toolbar during processing
+        setAiTransformToolbar(prev => ({ ...prev, visible: false }));
+
+        try {
+            const selectedText = aiTransformToolbar.selectedText;
+            let prompt = '';
+            
+            switch (transformType) {
+                case 'summarize':
+                    prompt = `Please summarize the following text concisely while preserving the key information:
+
+"${selectedText}"
+
+Return only the summarized text without any additional commentary.`;
+                    break;
+                case 'rewrite':
+                    prompt = `Please rewrite the following text to improve clarity, flow, and readability while maintaining the same meaning:
+
+"${selectedText}"
+
+Return only the rewritten text without any additional commentary.`;
+                    break;
+                case 'expand':
+                    prompt = `Please expand on the following text by adding relevant details, examples, or explanations while maintaining the original tone and style:
+
+"${selectedText}"
+
+Return only the expanded text without any additional commentary.`;
+                    break;
+                default:
+                    throw new Error(`Unknown transformation type: ${transformType}`);
+            }
+
+            const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=' + process.env.REACT_APP_GEMINI_API_KEY, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: [{
+                            text: prompt
+                        }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.7,
+                        topK: 40,
+                        topP: 0.95,
+                        maxOutputTokens: 2048,
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            const transformedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            
+            if (transformedText.trim()) {
+                // Sanitize the transformed text
+                const sanitizedText = sanitizeHtml(transformedText.trim());
+                
+                // Create action object for the confirmation system
+                const action = {
+                    execute: async (finalContent) => {
+                        return replaceSelectionWithHtml(finalContent);
+                    }
+                };
+                
+                // Show confirmation modal for the transformation
+                showConfirmation(
+                    action,
+                    `${transformType.charAt(0).toUpperCase() + transformType.slice(1)} Text`,
+                    `Replace the selected text with the ${transformType}d version?`,
+                    sanitizedText
+                );
+            } else {
+                throw new Error('No transformed text received from AI');
+            }
+        } catch (error) {
+            console.error(`Error during ${transformType} transformation:`, error);
+            // Show error in chat
+            setChatHistory(prev => [...prev, {
+                role: 'assistant',
+                parts: [{ text: `Sorry, I encountered an error while trying to ${transformType} the selected text: ${error.message}` }]
+            }]);
+        } finally {
+            setAiTransformLoading(false);
+            setAiTransformLoadingMessage('');
+        }
+    };
+
+    // Helper function to replace selected text with transformed content
+    const replaceSelectionWithHtml = (htmlContent) => {
+        if (!aiTransformToolbar.selectedRange) {
+            console.error('No selection range available for replacement');
+            return false;
+        }
+
+        try {
+            // Restore the selection
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            selection.addRange(aiTransformToolbar.selectedRange);
+            
+            // Use document.execCommand for better undo/redo compatibility
+            const success = document.execCommand('insertHTML', false, htmlContent);
+            
+            if (success) {
+                // Clear the stored range since it's no longer valid
+                setAiTransformToolbar(prev => ({ ...prev, selectedRange: null, selectedText: '' }));
+                
+                // Trigger content change to save the document
+                if (editorElementRef.current?._richEditor?.handleChange) {
+                    editorElementRef.current._richEditor.handleChange();
+                }
+                
+                return true;
+            } else {
+                throw new Error('document.execCommand failed');
+            }
+        } catch (error) {
+            console.error('Error replacing selection:', error);
+            return false;
         }
     };
 
@@ -3925,12 +4096,16 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
             if (aiTagSuggestions.length > 0 && tagInputContainerRef.current && !tagInputContainerRef.current.contains(event.target)) {
                 setAiTagSuggestions([]);
             }
+            // Hide AI transformation toolbar when clicking outside
+            if (aiTransformToolbar.visible && !event.target.closest('[style*="z-index: 10001"]')) {
+                setAiTransformToolbar(prev => ({ ...prev, visible: false }));
+            }
         };
         document.addEventListener('mousedown', handleClickOutside);
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay, aiTagSuggestions]);
+    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay, aiTagSuggestions, aiTransformToolbar.visible]);
 
 
 
@@ -4783,6 +4958,58 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                         </div>
                     )}
 
+                    {/* Feature 1: AI Content Transformation Toolbar */}
+                    {aiTransformToolbar.visible && (
+                        <div 
+                            className={`fixed p-1 rounded-md shadow-lg flex gap-1 transition-all duration-200
+                                ${isDarkMode ? 'bg-gray-700 border border-gray-600' : 'bg-white border border-gray-200'}`}
+                            style={{
+                                left: aiTransformToolbar.x,
+                                top: aiTransformToolbar.y,
+                                zIndex: 10001,
+                                fontSize: '12px',
+                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
+                            }}
+                        >
+                            <button 
+                                onClick={() => handleAiTransform('summarize')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-blue-300 hover:bg-blue-800 disabled:opacity-50' 
+                                        : 'text-blue-600 hover:bg-blue-100 disabled:opacity-50'
+                                    }`}
+                                title="Summarize selected text"
+                            >
+                                Summarize
+                            </button>
+                            <button 
+                                onClick={() => handleAiTransform('rewrite')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-green-300 hover:bg-green-800 disabled:opacity-50' 
+                                        : 'text-green-600 hover:bg-green-100 disabled:opacity-50'
+                                    }`}
+                                title="Rewrite selected text for clarity"
+                            >
+                                Rewrite
+                            </button>
+                            <button 
+                                onClick={() => handleAiTransform('expand')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-purple-300 hover:bg-purple-800 disabled:opacity-50' 
+                                        : 'text-purple-600 hover:bg-purple-100 disabled:opacity-50'
+                                    }`}
+                                title="Expand selected text with more details"
+                            >
+                                Expand
+                            </button>
+                        </div>
+                    )}
+
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
                     </div>
@@ -4860,11 +5087,11 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                             ))}
                         </div>
                     )}
-                    {llmLoading && (
+                    {(llmLoading || aiTransformLoading) && (
                         <div className="flex items-center justify-center mt-4">
                             <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
                             <span className={`ml-2 text-sm ${isDarkMode ? 'text-blue-400' : 'text-blue-500'}`}>
-                                {llmLoadingMessage || 'Thinking...'}
+                                {aiTransformLoadingMessage || llmLoadingMessage || 'Thinking...'}
                             </span>
                         </div>
                     )}
