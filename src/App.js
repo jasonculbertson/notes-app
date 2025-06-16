@@ -4317,24 +4317,25 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                     {/* Title with Icon and Toolbar */}
                     {currentDocumentId && (
                         <div className="group relative mb-6">
-                            {/* Notion-like Hover Toolbar */}
-                            <div className={`absolute -top-12 left-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-200 z-50 
+                            {/* Notion-like Hover Toolbar - Positioned to the right of title */}
+                            <div className={`absolute top-2 right-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all duration-200 z-50 
                                 px-3 py-2 rounded-lg shadow-lg border
                                 ${isDarkMode ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}
                             `}>
                                 <button
                                     onClick={() => setShowIconPicker(!showIconPicker)}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors font-medium
+                                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors font-medium
                                         ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-600'}
                                     `}
+                                    title="Add or change document icon"
                                 >
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                         <circle cx="12" cy="12" r="10"></circle>
                                         <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
                                         <line x1="9" y1="9" x2="9.01" y2="9"></line>
                                         <line x1="15" y1="9" x2="15.01" y2="9"></line>
                                     </svg>
-                                    Add icon
+                                    Icon
                                 </button>
                                 
                                 <button 
@@ -4350,20 +4351,22 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                         fileInput.click();
                                     }}
                                     disabled={isUploadingCover}
-                                    className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors font-medium
+                                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md transition-colors font-medium
                                         ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-600'}
                                         ${isUploadingCover ? 'opacity-50 cursor-not-allowed' : ''}
-                                    `}>
+                                    `}
+                                    title="Add or change cover image"
+                                >
                                     {isUploadingCover ? (
-                                        <div className="animate-spin rounded-full h-4 w-4 border-t border-current"></div>
+                                        <div className="animate-spin rounded-full h-3.5 w-3.5 border-t border-current"></div>
                                     ) : (
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                             <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path>
                                             <polyline points="16,6 12,2 8,6"></polyline>
                                             <line x1="12" y1="2" x2="12" y2="15"></line>
                                         </svg>
                                     )}
-                                    {isUploadingCover ? (uploadProgress || 'Uploading...') : 'Add cover'}
+                                    {isUploadingCover ? (uploadProgress || 'Uploading...') : 'Cover'}
                                 </button>
                             </div>
                             
