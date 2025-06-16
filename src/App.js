@@ -2247,12 +2247,22 @@ const App = () => {
         saveTimerRef.current = setTimeout(async () => {
             const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, currentDocumentId);
             try {
+                // Check if title changed to update parent links
+                const titleChanged = currentState.title !== lastSavedState.title;
+                const oldTitle = lastSavedState.title;
+                const newTitle = currentState.title;
+                
                 await updateDoc(docRef, {
                     content: currentDocumentContent,
                     title: currentDocumentTitle || 'Untitled',
                     tags: currentDocumentTags,
                     updatedAt: new Date()
                 });
+                
+                // If title changed, update parent links
+                if (titleChanged && oldTitle && newTitle && oldTitle !== newTitle) {
+                    await updateParentLinksForTitleChange(currentDocumentId, oldTitle, newTitle);
+                }
                 
                 // Update the last saved state after successful save
                 lastSavedStateRef.current = {
@@ -3035,6 +3045,63 @@ Return only the expanded text without any additional commentary.`;
         return { success: true, message: "Awaiting user confirmation..." };
     }, [appendContentToDocument, currentDocumentId, documents]);
 
+    const cleanUpPageWithConfirmation = useCallback(async (cleanedHtmlContent, improvementsSummary) => {
+        console.log('✨ cleanUpPageWithConfirmation called:', { improvementsSummary, contentLength: cleanedHtmlContent.length });
+        
+        if (!currentDocumentId) {
+            return { success: false, error: "No document is currently open" };
+        }
+
+        const action = {
+            execute: async (finalContent) => {
+                return await replaceCurrentDocumentContent(finalContent);
+            }
+        };
+
+        showConfirmation(
+            action,
+            'Clean Up Page',
+            `AI has cleaned up and reformatted this page. ${improvementsSummary}. Please review the changes:`,
+            cleanedHtmlContent
+        );
+
+        return { success: true, message: "Awaiting user confirmation..." };
+    }, [currentDocumentId]);
+
+    const replaceCurrentDocumentContent = useCallback(async (newHtmlContent) => {
+        if (!currentDocumentId || !db || !userId || !appId) {
+            return { success: false, error: "Missing required parameters" };
+        }
+
+        try {
+            // Convert HTML to Editor.js format
+            const editorData = convertHtmlToEditorJs(newHtmlContent);
+            const contentString = JSON.stringify(editorData);
+
+            // Update the document in Firestore
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, currentDocumentId);
+            await updateDoc(docRef, {
+                content: contentString,
+                updatedAt: Timestamp.now()
+            });
+
+            // Update local state
+            setCurrentDocumentContent(contentString);
+            
+            // Update the editor if it exists
+            if (editorElementRef.current?._richEditor?.setContent) {
+                editorElementRef.current._richEditor.setContent(newHtmlContent);
+            }
+
+            setSaveStatus('Page cleaned up successfully!');
+            return { success: true };
+        } catch (error) {
+            console.error('Error replacing document content:', error);
+            setSaveStatus('Failed to clean up page');
+            return { success: false, error: error.message };
+        }
+    }, [currentDocumentId, db, userId, appId]);
+
     const handleDeleteFile = async (fileId) => {
         if (!window.confirm('Are you sure you want to delete this file?')) return;
 
@@ -3382,11 +3449,288 @@ Return only the expanded text without any additional commentary.`;
             // Expand parent node if adding a child
             if (parentId) {
                 setExpandedNodes(prev => new Set([...prev, parentId]));
+                
+                // Add link to parent page
+                await addChildLinkToParent(parentId, newDocId, template.title || 'Untitled');
             }
         } catch (e) {
             console.error("Error adding document: ", e);
         } finally {
             setShowTemplateMenu(false);
+        }
+    };
+
+    const addChildLinkToParent = async (parentId, childId, childTitle) => {
+        if (!db || !userId || !appId || !parentId) {
+            console.error("Missing required parameters for adding child link to parent");
+            return;
+        }
+
+        try {
+            // Get the parent document
+            const parentDocRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, parentId);
+            const parentDoc = await getDoc(parentDocRef);
+            
+            if (!parentDoc.exists()) {
+                console.error("Parent document not found:", parentId);
+                return;
+            }
+
+            const parentData = parentDoc.data();
+            let parentContent = parentData.content || '';
+            
+            // Create the link text
+            const linkText = `[[${childTitle}]]`;
+            
+            // Convert current content to plain text to check if link already exists
+            let plainTextContent = '';
+            try {
+                if (parentContent) {
+                    const parsed = JSON.parse(parentContent);
+                    if (parsed.blocks) {
+                        plainTextContent = convertEditorToPlainText(parsed);
+                    } else {
+                        plainTextContent = convertHtmlToPlainText(parentContent);
+                    }
+                }
+            } catch (e) {
+                plainTextContent = convertHtmlToPlainText(parentContent);
+            }
+            
+            // Check if link already exists
+            if (plainTextContent.includes(linkText)) {
+                console.log("Link already exists in parent document");
+                return;
+            }
+            
+            // Add the link to the parent document
+            let updatedContent = '';
+            
+            try {
+                // Try to parse as Editor.js format
+                const parsed = JSON.parse(parentContent);
+                if (parsed.blocks) {
+                    // Add a new paragraph block with the link
+                    const newBlock = {
+                        type: "paragraph",
+                        data: {
+                            text: `<p>${linkText}</p>`
+                        }
+                    };
+                    
+                    parsed.blocks.push(newBlock);
+                    updatedContent = JSON.stringify(parsed);
+                } else {
+                    // Fallback: treat as HTML and append
+                    updatedContent = parentContent + `<p>${linkText}</p>`;
+                }
+            } catch (e) {
+                // Fallback: treat as HTML and append
+                if (parentContent.trim()) {
+                    updatedContent = parentContent + `<p>${linkText}</p>`;
+                } else {
+                    // Empty document, create basic structure
+                    updatedContent = JSON.stringify({
+                        blocks: [{
+                            type: "paragraph",
+                            data: {
+                                text: `<p>${linkText}</p>`
+                            }
+                        }]
+                    });
+                }
+            }
+            
+            // Update the parent document
+            await updateDoc(parentDocRef, {
+                content: updatedContent,
+                updatedAt: Timestamp.now()
+            });
+            
+            // Update linkedPages array
+            const currentLinkedPages = parentData.linkedPages || [];
+            if (!currentLinkedPages.includes(childId)) {
+                await updateDoc(parentDocRef, {
+                    linkedPages: [...currentLinkedPages, childId]
+                });
+            }
+            
+            console.log(`Added link to child "${childTitle}" in parent document`);
+            
+        } catch (error) {
+            console.error("Error adding child link to parent:", error);
+        }
+    };
+
+    const removeChildLinkFromParent = async (parentId, childId, childTitle) => {
+        if (!db || !userId || !appId || !parentId) {
+            console.error("Missing required parameters for removing child link from parent");
+            return;
+        }
+
+        try {
+            // Get the parent document
+            const parentDocRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, parentId);
+            const parentDoc = await getDoc(parentDocRef);
+            
+            if (!parentDoc.exists()) {
+                console.error("Parent document not found:", parentId);
+                return;
+            }
+
+            const parentData = parentDoc.data();
+            let parentContent = parentData.content || '';
+            
+            // Create the link text to remove
+            const linkText = `[[${childTitle}]]`;
+            
+            // Remove the link from the parent document content
+            let updatedContent = '';
+            
+            try {
+                // Try to parse as Editor.js format
+                const parsed = JSON.parse(parentContent);
+                if (parsed.blocks) {
+                    // Filter out blocks that contain only the link
+                    parsed.blocks = parsed.blocks.filter(block => {
+                        if (block.type === 'paragraph' && block.data && block.data.text) {
+                            const blockText = block.data.text.replace(/<[^>]*>/g, '').trim();
+                            return blockText !== linkText;
+                        }
+                        return true;
+                    });
+                    
+                    // Also remove the link from within blocks if it's part of larger text
+                    parsed.blocks = parsed.blocks.map(block => {
+                        if (block.type === 'paragraph' && block.data && block.data.text) {
+                            block.data.text = block.data.text.replace(new RegExp(`<p>\\s*\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]\\s*</p>`, 'g'), '');
+                            block.data.text = block.data.text.replace(new RegExp(`\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'), '');
+                        }
+                        return block;
+                    });
+                    
+                    updatedContent = JSON.stringify(parsed);
+                } else {
+                    // Fallback: treat as HTML and remove
+                    updatedContent = parentContent.replace(new RegExp(`<p>\\s*\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]\\s*</p>`, 'g'), '');
+                    updatedContent = updatedContent.replace(new RegExp(`\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'), '');
+                }
+            } catch (e) {
+                // Fallback: treat as HTML and remove
+                updatedContent = parentContent.replace(new RegExp(`<p>\\s*\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]\\s*</p>`, 'g'), '');
+                updatedContent = updatedContent.replace(new RegExp(`\\[\\[${childTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'), '');
+            }
+            
+            // Update the parent document
+            await updateDoc(parentDocRef, {
+                content: updatedContent,
+                updatedAt: Timestamp.now()
+            });
+            
+            // Remove from linkedPages array
+            const currentLinkedPages = parentData.linkedPages || [];
+            const updatedLinkedPages = currentLinkedPages.filter(id => id !== childId);
+            await updateDoc(parentDocRef, {
+                linkedPages: updatedLinkedPages
+            });
+            
+            console.log(`Removed link to child "${childTitle}" from parent document`);
+            
+        } catch (error) {
+            console.error("Error removing child link from parent:", error);
+        }
+    };
+
+    const updateParentLinksForTitleChange = async (documentId, oldTitle, newTitle) => {
+        if (!db || !userId || !appId || !documentId || !oldTitle || !newTitle) {
+            console.error("Missing required parameters for updating parent links");
+            return;
+        }
+
+        try {
+            // Find all documents that contain links to this document
+            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
+            const snapshot = await getDocs(notesRef);
+            
+            const oldLinkText = `[[${oldTitle}]]`;
+            const newLinkText = `[[${newTitle}]]`;
+            
+            const updatePromises = [];
+            
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                let content = data.content || '';
+                
+                // Check if this document contains the old link
+                let plainTextContent = '';
+                try {
+                    if (content) {
+                        const parsed = JSON.parse(content);
+                        if (parsed.blocks) {
+                            plainTextContent = convertEditorToPlainText(parsed);
+                        } else {
+                            plainTextContent = convertHtmlToPlainText(content);
+                        }
+                    }
+                } catch (e) {
+                    plainTextContent = convertHtmlToPlainText(content);
+                }
+                
+                if (plainTextContent.includes(oldLinkText)) {
+                    console.log(`Updating link in document: ${data.title} (${doc.id})`);
+                    
+                    // Update the content to replace old link with new link
+                    let updatedContent = '';
+                    
+                    try {
+                        // Try to parse as Editor.js format
+                        const parsed = JSON.parse(content);
+                        if (parsed.blocks) {
+                            // Update links in Editor.js blocks
+                            parsed.blocks = parsed.blocks.map(block => {
+                                if (block.type === 'paragraph' && block.data && block.data.text) {
+                                    block.data.text = block.data.text.replace(
+                                        new RegExp(`\\[\\[${oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'),
+                                        newLinkText
+                                    );
+                                }
+                                return block;
+                            });
+                            updatedContent = JSON.stringify(parsed);
+                        } else {
+                            // Fallback: treat as HTML
+                            updatedContent = content.replace(
+                                new RegExp(`\\[\\[${oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'),
+                                newLinkText
+                            );
+                        }
+                    } catch (e) {
+                        // Fallback: treat as HTML
+                        updatedContent = content.replace(
+                            new RegExp(`\\[\\[${oldTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]\\]`, 'g'),
+                            newLinkText
+                        );
+                    }
+                    
+                    // Add update promise
+                    const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, doc.id);
+                    updatePromises.push(
+                        updateDoc(docRef, {
+                            content: updatedContent,
+                            updatedAt: Timestamp.now()
+                        })
+                    );
+                }
+            });
+            
+            // Execute all updates
+            if (updatePromises.length > 0) {
+                await Promise.all(updatePromises);
+                console.log(`Updated ${updatePromises.length} documents with new link text`);
+            }
+            
+        } catch (error) {
+            console.error("Error updating parent links for title change:", error);
         }
     };
 
@@ -3396,18 +3740,36 @@ Return only the expanded text without any additional commentary.`;
             console.error("Firestore: Database, user, document ID, or appId not ready to delete.");
             return;
         }
-        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, documentIdToDelete);
+        
         try {
-            await deleteDoc(docRef);
-            setSaveStatus('Page deleted');
-            // If we deleted the current document, clear the editor
-            if (documentIdToDelete === currentDocumentId) {
-                setCurrentDocumentId(null);
-                setCurrentDocumentContent('');
-                setCurrentDocumentTitle('');
-                setCurrentDocumentTags([]);
-                setCurrentDocumentIcon('');
-                setCurrentDocumentCoverImage('');
+            // Get the document data before deleting to check if it has a parent
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, documentIdToDelete);
+            const docSnapshot = await getDoc(docRef);
+            
+            if (docSnapshot.exists()) {
+                const docData = docSnapshot.data();
+                const parentId = docData.parentId;
+                const docTitle = docData.title;
+                
+                // Delete the document
+                await deleteDoc(docRef);
+                
+                // Remove link from parent if this was a child document
+                if (parentId) {
+                    await removeChildLinkFromParent(parentId, documentIdToDelete, docTitle);
+                }
+                
+                setSaveStatus('Page deleted');
+                
+                // If we deleted the current document, clear the editor
+                if (documentIdToDelete === currentDocumentId) {
+                    setCurrentDocumentId(null);
+                    setCurrentDocumentContent('');
+                    setCurrentDocumentTitle('');
+                    setCurrentDocumentTags([]);
+                    setCurrentDocumentIcon('');
+                    setCurrentDocumentCoverImage('');
+                }
             }
         } catch (e) {
             console.error("Error deleting document: ", e);
@@ -3609,16 +3971,18 @@ Instructions:
 1. **ALWAYS use function calls for document operations** - Never just describe what you'll do, actually do it
 2. **For explicit document creation requests**: IMMEDIATELY call createNewDocument function with comprehensive HTML content
 3. **For content addition requests**: IMMEDIATELY call appendContentToDocument function
-4. **For conversational questions**: Provide helpful answers in the chat without creating documents
-5. **For simple information requests**: Answer directly in the chat unless the user specifically asks to save the information
-6. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags when creating documents
-7. **Context awareness**: When users refer to "this page", "the current document", "this document", "the one that is open now", or similar phrases, they mean the currently open document shown above
+4. **For page cleanup requests**: IMMEDIATELY call cleanUpPage function when users ask to "clean up this page", "reformat this page", "organize this content", "restructure this document", or similar cleanup language
+5. **For conversational questions**: Provide helpful answers in the chat without creating documents
+6. **For simple information requests**: Answer directly in the chat unless the user specifically asks to save the information
+7. **Use HTML formatting**: Include proper <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em> tags when creating documents
+8. **Context awareness**: When users refer to "this page", "the current document", "this document", "the one that is open now", or similar phrases, they mean the currently open document shown above
 
 CRITICAL: Only create documents when the user explicitly asks to "create a document", "make a document", "save this information", or uses similar explicit creation language. For general questions and conversations, provide helpful answers in the chat.
 
 CAPABILITIES:
 - I MUST use createNewDocument function for any document creation
 - I MUST use appendContentToDocument function for adding content
+- I MUST use cleanUpPage function for page cleanup and reformatting requests
 - I can search through uploaded files with searchFileContent
 - I provide comprehensive information using my training data
 - I suggest search terms for additional research
@@ -3674,6 +4038,7 @@ Content: ${currentContent || '(Empty document)'}`;
 CRITICAL INSTRUCTIONS:
 - Only create documents when users explicitly ask to "create a document", "make a document", "save this information", or use similar explicit creation language
 - When users ask to add content, you MUST call the appendContentToDocument function
+- When users ask to clean up, reformat, or organize content, you MUST call the cleanUpPage function
 - For general questions and conversations, provide helpful answers directly in the chat
 - Never just say you will create something - actually call the function when explicitly requested
 - Use comprehensive HTML content with proper formatting when creating documents
@@ -3682,6 +4047,7 @@ CRITICAL INSTRUCTIONS:
 AVAILABLE FUNCTIONS:
 - createNewDocument: Use ONLY for explicit document creation requests
 - appendContentToDocument: Use for adding content to documents
+- cleanUpPage: Use for cleaning up and reformatting page content
 - searchFileContent: Use to search uploaded files
 
 Answer conversational questions directly in the chat. Only create documents when explicitly requested.${currentDocumentInfo}`
@@ -3806,6 +4172,24 @@ Answer conversational questions directly in the chat. Only create documents when
                         },
                         required: ["tags"]
                     }
+                },
+                {
+                    name: "cleanUpPage",
+                    description: "Clean up and reformat the current document's content to improve organization and readability. Use this when the user asks to 'clean up this page', 'reformat this page', 'organize this content', or similar requests.",
+                    parameters: {
+                        type: "OBJECT",
+                        properties: {
+                            cleanedHtmlContent: {
+                                type: "STRING",
+                                description: "The cleaned up and reformatted HTML content with proper headings, bullet points, organization, and formatting. Use <h1>, <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em> tags appropriately."
+                            },
+                            improvementsSummary: {
+                                type: "STRING",
+                                description: "A brief summary of the improvements made (e.g., 'Added headings, organized into sections, converted to bullet points')"
+                            }
+                        },
+                        required: ["cleanedHtmlContent", "improvementsSummary"]
+                    }
                 }
             ]
         }];
@@ -3897,6 +4281,16 @@ Answer conversational questions directly in the chat. Only create documents when
                                 setAiTagSuggestions(functionArgs.tags);
                                 setLlmResponse(''); // Clear response as suggestions are the primary output
                                 responseText = ''; // Don't add to response text
+                            } else if (functionName === 'cleanUpPage') {
+                                result = await cleanUpPageWithConfirmation(
+                                    functionArgs.cleanedHtmlContent,
+                                    functionArgs.improvementsSummary
+                                );
+                                if (result.success) {
+                                    responseText += `✨ Page cleanup ready for your review. ${functionArgs.improvementsSummary}. Please review and confirm the changes. `;
+                                } else {
+                                    responseText += `❌ Failed to prepare page cleanup: ${result.error}. `;
+                                }
                             }
                             
                             functionResults.push({
