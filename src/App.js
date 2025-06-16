@@ -5092,7 +5092,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                         <div>
                                             <div className="text-sm font-medium">Add from apps</div>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                                Connect Google Drive, OneDrive
+                                                Connect Google Drive
                                             </div>
                                         </div>
                                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -5121,44 +5121,6 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                                 <div className="text-sm font-medium">Google Drive</div>
                                                 <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                                                     Connect Google Docs
-                                                </div>
-                                            </div>
-                                        </button>
-                                        
-                                        <button
-                                            onClick={handleGoogleDocsConnect}
-                                            className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
-                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
-                                            `}
-                                        >
-                                            <div className="w-6 h-6 rounded-md bg-blue-600 flex items-center justify-center mr-3">
-                                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
-                                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
-                                                </svg>
-                                            </div>
-                                            <div>
-                                                <div className="text-sm font-medium">Connect Microsoft OneDrive</div>
-                                                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                                    Personal
-                                                </div>
-                                            </div>
-                                        </button>
-
-                                        <button
-                                            onClick={handleGoogleDocsConnect}
-                                            className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200
-                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
-                                            `}
-                                        >
-                                            <div className="w-6 h-6 rounded-md bg-blue-700 flex items-center justify-center mr-3">
-                                                <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24">
-                                                    <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z"/>
-                                                </svg>
-                                            </div>
-                                            <div>
-                                                <div className="text-sm font-medium">Connect Microsoft OneDrive</div>
-                                                <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                                    Work/School - Includes SharePoint
                                                 </div>
                                             </div>
                                         </button>
