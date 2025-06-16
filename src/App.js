@@ -5593,7 +5593,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
 
             {/* Phase 4: User Confirmation Modal */}
             {showConfirmationModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10002]">
                     <div className={`rounded-lg p-6 w-full max-w-2xl mx-4 max-h-[80vh] overflow-y-auto ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
                         <div className="flex items-center justify-between mb-4">
                             <h3 className={`text-lg font-semibold ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
@@ -5691,7 +5691,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
 
             {/* Google Link Modal */}
             {showAddGoogleLinkModal && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[10002]">
                     <div className={`rounded-lg p-6 w-full max-w-md mx-4 ${isDarkMode ? 'bg-gray-800' : 'bg-white'}`}>
                         <h3 className={`text-lg font-semibold mb-4 ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
                             Add Google Link
