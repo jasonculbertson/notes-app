@@ -712,10 +712,7 @@ const App = () => {
     const [isUploadingCover, setIsUploadingCover] = useState(false);
     const [uploadProgress, setUploadProgress] = useState('');
 
-    // Selected text Q&A states
-    const [selectedText, setSelectedText] = useState('');
-    const [showSelectedTextMenu, setShowSelectedTextMenu] = useState(false);
-    const [selectedTextPosition, setSelectedTextPosition] = useState({ x: 0, y: 0 });
+    // UI state management
     const [openOverflowMenu, setOpenOverflowMenu] = useState(null); // Track which node's overflow menu is open
 
     // Feature 1: AI Content Transformation - State Management
@@ -812,12 +809,6 @@ const App = () => {
                         
                         if (isWithinEditor) {
                             console.log("Valid selection within editor detected");
-                            setSelectedText(selectedTextContent);
-                            setSelectedTextPosition({
-                                x: Math.max(50, Math.min(window.innerWidth - 150, rect.left + (rect.width / 2))), // Keep within screen bounds
-                                y: Math.max(50, rect.top - 60) // Position above selection with margin
-                            });
-                            setShowSelectedTextMenu(true);
                             
                             // Feature 1: AI Transformation Toolbar - Show with delay to avoid flicker
                             setTimeout(() => {
@@ -829,7 +820,7 @@ const App = () => {
                                         const currentRect = currentRange.getBoundingClientRect();
                                         setAiTransformToolbar({
                                             visible: true,
-                                            x: currentRect.left + (currentRect.width / 2) - 60, // Center toolbar (assuming ~120px width)
+                                            x: currentRect.left + (currentRect.width / 2) - 100, // Center toolbar (assuming ~200px width)
                                             y: currentRect.top - 40, // Position above selection
                                             selectedText: currentSelection.toString().trim(),
                                             selectedRange: currentRange.cloneRange() // Store a copy of the range
@@ -838,9 +829,9 @@ const App = () => {
                                 }
                             }, 200); // 200ms delay to prevent flicker
                             
-                            console.log("Showing selected text menu at position:", {
+                            console.log("Showing AI toolbar at position:", {
                                 x: rect.left + (rect.width / 2),
-                                y: rect.top - 60
+                                y: rect.top - 40
                             });
                             return;
                         } else {
@@ -854,9 +845,7 @@ const App = () => {
                 console.log("Selection too short or no range:", selectedTextContent.length);
             }
             
-            // Hide menus if no valid selection
-            setShowSelectedTextMenu(false);
-            setSelectedText('');
+            // Hide AI toolbar if no valid selection
             setAiTransformToolbar(prev => ({ ...prev, visible: false }));
         }, 50); // Slightly longer delay to ensure selection is complete
     }, []); // No dependencies needed since we're using state setters directly
@@ -4080,9 +4069,6 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
             if (templateMenuRef.current && !templateMenuRef.current.contains(event.target)) {
                 setShowTemplateMenu(false);
             }
-            if (showSelectedTextMenu && !event.target.closest('.ask-ai-menu')) {
-                setShowSelectedTextMenu(false);
-            }
             // Close overflow menu when clicking outside
             if (openOverflowMenu && !event.target.closest('.overflow-menu')) {
                 setOpenOverflowMenu(null);
@@ -4105,7 +4091,7 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [showSelectedTextMenu, openOverflowMenu, showPlusOverlay, aiTagSuggestions, aiTransformToolbar.visible]);
+    }, [openOverflowMenu, showPlusOverlay, aiTagSuggestions, aiTransformToolbar.visible]);
 
 
 
@@ -4896,51 +4882,89 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
 
 
 
-                    {/* Floating Ask AI Button for Selected Text */}
-                    {showSelectedTextMenu && (
+                    {/* Unified AI Toolbar for Selected Text */}
+                    {aiTransformToolbar.visible && (
                         <div 
-                            className={`fixed cursor-pointer px-2 py-1.5 rounded shadow-lg flex items-center gap-1.5 transition-all duration-200 hover:scale-105
+                            className={`fixed p-1 rounded shadow-lg flex gap-1 transition-all duration-200
                                 ${isDarkMode 
                                     ? 'bg-gray-700 text-gray-100 border border-gray-600' 
                                     : 'bg-gray-800 text-white border border-gray-700'
                                 }`}
                             style={{
-                                left: selectedTextPosition.x,
-                                top: selectedTextPosition.y - 2, // Almost touching - just 2px above
-                                transform: 'translateX(-50%)', // Only center horizontally
-                                zIndex: 10000,
+                                left: aiTransformToolbar.x,
+                                top: aiTransformToolbar.y,
+                                zIndex: 10001,
                                 fontSize: '11px',
                                 fontWeight: '500',
-                                whiteSpace: 'nowrap',
                                 boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)'
                             }}
-                            onMouseDown={(e) => {
-                                console.log("Ask AI tooltip mousedown!");
-                                e.preventDefault();
-                                e.stopPropagation();
-                                
-                                // Automatically ask about the selected text
-                                const question = `Tell me about "${selectedText}"`;
-                                console.log("Auto-generated question:", question);
-                                console.log("Selected text:", selectedText);
-                                console.log("askLlm function:", typeof askLlm);
-                                
-                                // Hide the menu first
-                                setShowSelectedTextMenu(false);
-                                
-                                // Call askLlm
-                                try {
-                                    askLlm(question, selectedText);
-                                    console.log("askLlm called successfully");
-                                } catch (error) {
-                                    console.error("Error calling askLlm:", error);
-                                }
-                            }}
                         >
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                            </svg>
-                            <span>Ask AI</span>
+                            {/* Ask AI Button */}
+                            <button 
+                                onClick={() => {
+                                    const question = `Tell me about "${aiTransformToolbar.selectedText}"`;
+                                    setAiTransformToolbar(prev => ({ ...prev, visible: false }));
+                                    try {
+                                        askLlm(question, aiTransformToolbar.selectedText);
+                                    } catch (error) {
+                                        console.error("Error calling askLlm:", error);
+                                    }
+                                }}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium flex items-center gap-1
+                                    ${isDarkMode 
+                                        ? 'text-gray-100 hover:bg-gray-600 disabled:opacity-50' 
+                                        : 'text-white hover:bg-gray-700 disabled:opacity-50'
+                                    }`}
+                                title="Ask AI about selected text"
+                            >
+                                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                </svg>
+                                Ask AI
+                            </button>
+                            
+                            {/* Separator */}
+                            <div className={`w-px h-6 ${isDarkMode ? 'bg-gray-600' : 'bg-gray-600'}`}></div>
+                            
+                            {/* Transformation Buttons */}
+                            <button 
+                                onClick={() => handleAiTransform('summarize')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-gray-100 hover:bg-gray-600 disabled:opacity-50' 
+                                        : 'text-white hover:bg-gray-700 disabled:opacity-50'
+                                    }`}
+                                title="Summarize selected text"
+                            >
+                                Summarize
+                            </button>
+                            <button 
+                                onClick={() => handleAiTransform('rewrite')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-gray-100 hover:bg-gray-600 disabled:opacity-50' 
+                                        : 'text-white hover:bg-gray-700 disabled:opacity-50'
+                                    }`}
+                                title="Rewrite selected text for clarity"
+                            >
+                                Rewrite
+                            </button>
+                            <button 
+                                onClick={() => handleAiTransform('expand')}
+                                disabled={aiTransformLoading}
+                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
+                                    ${isDarkMode 
+                                        ? 'text-gray-100 hover:bg-gray-600 disabled:opacity-50' 
+                                        : 'text-white hover:bg-gray-700 disabled:opacity-50'
+                                    }`}
+                                title="Expand selected text with more details"
+                            >
+                                Expand
+                            </button>
+                            
                             {/* Arrow pointing down to selection */}
                             <div 
                                 className="absolute pointer-events-none"
@@ -4955,58 +4979,6 @@ Be proactive and actually CREATE documents when users ask about topics, don't ju
                                     borderTop: `4px solid ${isDarkMode ? '#374151' : '#1f2937'}`
                                 }}
                             />
-                        </div>
-                    )}
-
-                    {/* Feature 1: AI Content Transformation Toolbar */}
-                    {aiTransformToolbar.visible && (
-                        <div 
-                            className={`fixed p-1 rounded-md shadow-lg flex gap-1 transition-all duration-200
-                                ${isDarkMode ? 'bg-gray-700 border border-gray-600' : 'bg-white border border-gray-200'}`}
-                            style={{
-                                left: aiTransformToolbar.x,
-                                top: aiTransformToolbar.y,
-                                zIndex: 10001,
-                                fontSize: '12px',
-                                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)'
-                            }}
-                        >
-                            <button 
-                                onClick={() => handleAiTransform('summarize')}
-                                disabled={aiTransformLoading}
-                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
-                                    ${isDarkMode 
-                                        ? 'text-blue-300 hover:bg-blue-800 disabled:opacity-50' 
-                                        : 'text-blue-600 hover:bg-blue-100 disabled:opacity-50'
-                                    }`}
-                                title="Summarize selected text"
-                            >
-                                Summarize
-                            </button>
-                            <button 
-                                onClick={() => handleAiTransform('rewrite')}
-                                disabled={aiTransformLoading}
-                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
-                                    ${isDarkMode 
-                                        ? 'text-green-300 hover:bg-green-800 disabled:opacity-50' 
-                                        : 'text-green-600 hover:bg-green-100 disabled:opacity-50'
-                                    }`}
-                                title="Rewrite selected text for clarity"
-                            >
-                                Rewrite
-                            </button>
-                            <button 
-                                onClick={() => handleAiTransform('expand')}
-                                disabled={aiTransformLoading}
-                                className={`px-2 py-1 rounded-sm transition-colors duration-200 font-medium
-                                    ${isDarkMode 
-                                        ? 'text-purple-300 hover:bg-purple-800 disabled:opacity-50' 
-                                        : 'text-purple-600 hover:bg-purple-100 disabled:opacity-50'
-                                    }`}
-                                title="Expand selected text with more details"
-                            >
-                                Expand
-                            </button>
                         </div>
                     )}
 
