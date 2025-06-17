@@ -2794,7 +2794,7 @@ const App = () => {
             document.removeEventListener('keydown', handleKeyDown);
             console.log("Text selection and internal linking listeners removed");
         };
-    }, [handleTextSelection, detectInternalLinkTrigger, linkAutocomplete.visible, linkAutocomplete.selectedIndex, linkAutocomplete.suggestions, insertInternalLink]);
+    }, [handleTextSelection, detectInternalLinkTrigger, linkAutocomplete.visible, linkAutocomplete.selectedIndex, linkAutocomplete.suggestions]);
 
     // Update all document titles for autocomplete
     useEffect(() => {
@@ -4224,7 +4224,7 @@ Return only the expanded text without any additional commentary.`;
             console.error('Error inserting internal link:', error);
             setLinkAutocomplete(prev => ({ ...prev, visible: false }));
         }
-    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
+    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks, handleAddDocument]);
 
     const addChildLinkToParent = async (parentId, childId, childTitle) => {
         if (!db || !userId || !appId || !parentId) {
