@@ -488,6 +488,33 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         document.execCommand('insertHTML', false, dividerHtml);
     };
     
+    const insertLinksBlock = () => {
+        const linksBlockHtml = `
+            <div class="links-block" data-links-block="true" style="margin: 8px 0; padding: 0;">
+                <div class="links-content" style="color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; font-size: 14px;">
+                    Loading links...
+                </div>
+            </div>
+            <p><br></p>
+        `;
+        document.execCommand('insertHTML', false, linksBlockHtml);
+        
+        // Trigger an update to populate the links
+        setTimeout(() => {
+            if (window.updateAllLinksBlocks) {
+                window.updateAllLinksBlocks();
+            }
+        }, 100);
+    };
+    
+    // Make updateAllLinksBlocks available globally for this editor instance
+    if (!window.updateAllLinksBlocks) {
+        window.updateAllLinksBlocks = () => {
+            // This will be set from the main App component
+            console.log('updateAllLinksBlocks not yet available');
+        };
+    }
+    
     const insertHeading = (headingType) => {
         const selection = window.getSelection();
         const range = selection.getRangeAt(0);
@@ -2538,15 +2565,16 @@ const App = () => {
             const textContent = textNode.textContent;
             const cursorPosition = range.startOffset;
             
-            // Look for [[ pattern before cursor
+            // Look for / pattern before cursor for existing pages
             const beforeCursor = textContent.substring(0, cursorPosition);
-            const linkMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
+            const slashMatch = beforeCursor.match(/\/([^\/\s]*?)$/);
+            const doubleBracketMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
             
-            if (linkMatch && allDocumentTitles.length > 0) {
-                const searchTerm = linkMatch[1];
-                const linkStartPos = cursorPosition - linkMatch[0].length;
+            if (slashMatch && allDocumentTitles.length > 0) {
+                const searchTerm = slashMatch[1];
+                const linkStartPos = cursorPosition - slashMatch[0].length;
                 
-                // Create range for the [[ trigger
+                // Create range for the / trigger
                 const linkRange = document.createRange();
                 linkRange.setStart(textNode, linkStartPos);
                 linkRange.setEnd(textNode, cursorPosition);
@@ -2567,7 +2595,38 @@ const App = () => {
                     searchTerm,
                     suggestions,
                     selectedIndex: 0,
-                    range: linkRange.cloneRange()
+                    range: linkRange.cloneRange(),
+                    triggerType: 'slash'
+                });
+            } else if (doubleBracketMatch) {
+                const searchTerm = doubleBracketMatch[1];
+                const linkStartPos = cursorPosition - doubleBracketMatch[0].length;
+                
+                // Create range for the [[ trigger
+                const linkRange = document.createRange();
+                linkRange.setStart(textNode, linkStartPos);
+                linkRange.setEnd(textNode, cursorPosition);
+                
+                // Get position for autocomplete
+                const rect = linkRange.getBoundingClientRect();
+                
+                // Show only "Add page" option
+                const addPageSuggestion = [{
+                    id: 'add-new-page',
+                    title: `Add "${searchTerm || 'New page'}"`,
+                    isNewPage: true,
+                    newPageTitle: searchTerm || 'New page'
+                }];
+                
+                setLinkAutocomplete({
+                    visible: true,
+                    x: rect.left,
+                    y: rect.bottom + 5,
+                    searchTerm,
+                    suggestions: addPageSuggestion,
+                    selectedIndex: 0,
+                    range: linkRange.cloneRange(),
+                    triggerType: 'doubleBracket'
                 });
             } else {
                 setLinkAutocomplete(prev => ({ ...prev, visible: false }));
@@ -2601,14 +2660,14 @@ const App = () => {
         }
     }, [db, userId, appId]);
 
-    const insertInternalLink = useCallback((targetDoc) => {
+    const insertInternalLink = useCallback(async (targetDoc) => {
         try {
             if (!linkAutocomplete.range || !targetDoc) return;
 
             const selection = window.getSelection();
             selection.removeAllRanges();
             
-            // Extend range to include the full [[ pattern
+            // Extend range to include the full trigger pattern
             const textNode = linkAutocomplete.range.startContainer;
             const fullRange = document.createRange();
             fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
@@ -2616,14 +2675,40 @@ const App = () => {
             
             selection.addRange(fullRange);
             
-            // Create internal link HTML with proper styling
-            const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
-            
-            // Replace the [[ pattern with the link
-            document.execCommand('insertHTML', false, linkHtml);
-            
-            // Update document's linked pages
-            updateDocumentLinks(currentDocumentId, targetDoc.id);
+            // Handle new page creation
+            if (targetDoc.isNewPage) {
+                try {
+                    // Create new document
+                    const newDoc = await handleAddDocument(
+                        { name: 'Blank Page', title: targetDoc.newPageTitle, content: '' },
+                        currentDocumentId // Set current document as parent
+                    );
+                    
+                    if (newDoc) {
+                        // Create internal link HTML with proper styling
+                        const linkHtml = `<a href="#" data-internal-link-id="${newDoc.id}" class="internal-link">${targetDoc.newPageTitle}</a>`;
+                        
+                        // Replace the [[ pattern with the link
+                        document.execCommand('insertHTML', false, linkHtml);
+                        
+                        // Update document's linked pages
+                        updateDocumentLinks(currentDocumentId, newDoc.id);
+                    }
+                } catch (error) {
+                    console.error('Error creating new page:', error);
+                    // Fallback: just insert text
+                    document.execCommand('insertHTML', false, targetDoc.newPageTitle);
+                }
+            } else {
+                // Handle existing page linking
+                const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
+                
+                // Replace the trigger pattern with the link
+                document.execCommand('insertHTML', false, linkHtml);
+                
+                // Update document's linked pages
+                updateDocumentLinks(currentDocumentId, targetDoc.id);
+            }
             
             // Hide autocomplete
             setLinkAutocomplete(prev => ({ ...prev, visible: false }));
@@ -2636,7 +2721,7 @@ const App = () => {
             console.error('Error inserting internal link:', error);
             setLinkAutocomplete(prev => ({ ...prev, visible: false }));
         }
-    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
+    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks, handleAddDocument]);
 
     const fetchDocumentBacklinks = useCallback(async (docId) => {
         if (!db || !userId || !appId || !docId) return;
@@ -2662,6 +2747,52 @@ const App = () => {
             console.error('Error fetching backlinks:', error);
         }
     }, [db, userId, appId]);
+
+    // Update all Links blocks in the current document
+    const updateAllLinksBlocks = useCallback(() => {
+        if (!editorElementRef.current || !currentDocumentId) return;
+        
+        const editorElement = editorElementRef.current;
+        const linksBlocks = editorElement.querySelectorAll('[data-links-block="true"]');
+        
+        if (linksBlocks.length === 0) return;
+        
+        // Get forward links from current document (linkedPages field)
+        const currentDoc = documents.find(doc => doc.id === currentDocumentId);
+        const linkedPageIds = currentDoc?.linkedPages || [];
+        
+        // Get the actual document objects for linked pages
+        const linkedDocs = documents.filter(doc => linkedPageIds.includes(doc.id));
+        
+        // Update each Links block
+        linksBlocks.forEach(block => {
+            const contentDiv = block.querySelector('.links-content');
+            if (!contentDiv) return;
+            
+            if (linkedDocs.length === 0) {
+                contentDiv.innerHTML = '';
+            } else {
+                const linksHtml = linkedDocs.map(doc => `
+                    <div style="margin-bottom: 4px;">
+                        <button 
+                            onclick="handleDocumentSelect('${doc.id}')"
+                            style="display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; border: none; background: transparent; color: ${isDarkMode ? '#e5e7eb' : '#374151'}; text-decoration: none; transition: all 0.15s ease; cursor: pointer; font-size: 14px; width: auto; text-align: left;"
+                            onmouseover="this.style.backgroundColor='${isDarkMode ? '#374151' : '#f1f1f1'}'"
+                            onmouseout="this.style.backgroundColor='transparent'"
+                        >
+                            <span style="font-size: 14px; opacity: 0.7;">${doc.icon || '📄'}</span>
+                            <span style="font-size: 14px; color: ${isDarkMode ? '#e5e7eb' : '#374151'};">${doc.title || 'Untitled'}</span>
+                        </button>
+                    </div>
+                `).join('');
+                
+                contentDiv.innerHTML = linksHtml;
+            }
+        });
+    }, [currentDocumentId, documents, isDarkMode]);
+
+    // Set the global function for the rich text editor
+    window.updateAllLinksBlocks = updateAllLinksBlocks;
 
     // Handle internal link clicks
     const handleInternalLinkClick = useCallback((e) => {
@@ -2762,6 +2893,45 @@ const App = () => {
             fetchDocumentBacklinks(currentDocumentId);
         }
     }, [currentDocumentId, fetchDocumentBacklinks]);
+
+    // Update Links blocks when document or linked documents change
+    useEffect(() => {
+        if (currentDocumentId && documents.length > 0) {
+            updateAllLinksBlocks();
+            
+            // Auto-add Links block if document has linked pages but no Links block exists
+            const currentDoc = documents.find(doc => doc.id === currentDocumentId);
+            const hasLinkedPages = currentDoc?.linkedPages && currentDoc.linkedPages.length > 0;
+            
+            if (hasLinkedPages && editorElementRef.current) {
+                const existingLinksBlocks = editorElementRef.current.querySelectorAll('[data-links-block="true"]');
+                
+                if (existingLinksBlocks.length === 0) {
+                    // Add Links block at the end of the document
+                    setTimeout(() => {
+                        if (editorElementRef.current?._richEditor?.editor) {
+                            const editor = editorElementRef.current._richEditor.editor;
+                            
+                            // Create the Links block at the end
+                            const linksBlockHtml = `
+                                <div class="links-block" data-links-block="true" style="margin: 8px 0; padding: 0;">
+                                    <div class="links-content" style="color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; font-size: 14px;">
+                                        Loading links...
+                                    </div>
+                                </div>
+                            `;
+                            
+                            // Insert at the end
+                            editor.innerHTML += linksBlockHtml;
+                            
+                            // Update the Links block content
+                            setTimeout(() => updateAllLinksBlocks(), 100);
+                        }
+                    }, 500);
+                }
+            }
+        }
+    }, [currentDocumentId, documents, updateAllLinksBlocks, isDarkMode]);
 
     // Add click listener for internal links
     useEffect(() => {
@@ -4124,6 +4294,13 @@ Return only the expanded text without any additional commentary.`;
             
             console.log(`Added link to child "${childTitle}" in parent document`);
             
+            // Update Links blocks in the parent document if any exist
+            if (parentId === currentDocumentId) {
+                setTimeout(() => {
+                    updateAllLinksBlocks();
+                }, 100);
+            }
+            
         } catch (error) {
             console.error("Error adding child link to parent:", error);
         }
@@ -4245,6 +4422,13 @@ Return only the expanded text without any additional commentary.`;
             });
             
             console.log(`Removed link to child "${childTitle}" from parent document`);
+            
+            // Update Links blocks in the parent document if any exist
+            if (parentId === currentDocumentId) {
+                setTimeout(() => {
+                    updateAllLinksBlocks();
+                }, 100);
+            }
             
         } catch (error) {
             console.error("Error removing child link from parent:", error);
@@ -4984,6 +5168,9 @@ Answer conversational questions directly in the chat. Only create documents when
         setLlmResponse('');
         setShowSidebarMobile(false);
     };
+
+    // Set the global function for the rich text editor Links blocks
+    window.handleDocumentSelect = handleDocumentSelect;
 
     const templates = [
         { name: 'Blank Page', title: '', content: '' },
@@ -6441,6 +6628,8 @@ Answer conversational questions directly in the chat. Only create documents when
                         </div>
                     )}
 
+
+
                     <div className="mt-4 text-xs text-right">
                         <span className={isDarkMode ? 'text-gray-500' : 'text-gray-500'}>{saveStatus}</span>
                     </div>
@@ -6835,33 +7024,7 @@ Answer conversational questions directly in the chat. Only create documents when
                     )}
                 </div>
 
-                {/* Feature 2: Document Backlinks */}
-                {currentDocumentId && documentBacklinks.length > 0 && (
-                    <div className={`mb-4 p-3 rounded-md border ${isDarkMode ? 'bg-gray-700 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
-                        <h4 className={`text-sm font-medium mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-                            </svg>
-                            Backlinks ({documentBacklinks.length})
-                        </h4>
-                        <div className="space-y-1">
-                            {documentBacklinks.map((backlink) => (
-                                <button
-                                    key={backlink.id}
-                                    onClick={() => handleDocumentSelect(backlink.id)}
-                                    className={`w-full text-left p-2 rounded-md text-sm transition-colors duration-200 flex items-center gap-2
-                                        ${isDarkMode ? 'text-gray-300 hover:bg-gray-600' : 'text-gray-700 hover:bg-gray-100'}
-                                    `}
-                                >
-                                    <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                                    </svg>
-                                    <span className="truncate">{backlink.title}</span>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
+
 
                 {documents.length === 0 && (
                     <p className={`text-xs mt-2 text-center ${isDarkMode ? 'text-red-300' : 'text-red-500'}`}>Create some pages to use the AI assistant.</p>
