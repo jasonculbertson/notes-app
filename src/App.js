@@ -488,25 +488,6 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         document.execCommand('insertHTML', false, dividerHtml);
     };
     
-    const insertLinksBlock = () => {
-        const linksBlockHtml = `
-            <div class="links-block" data-links-block="true" style="margin: 8px 0; padding: 0;">
-                <div class="links-content" style="color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; font-size: 14px;">
-                    Loading links...
-                </div>
-            </div>
-            <p><br></p>
-        `;
-        document.execCommand('insertHTML', false, linksBlockHtml);
-        
-        // Trigger an update to populate the links
-        setTimeout(() => {
-            if (window.updateAllLinksBlocks) {
-                window.updateAllLinksBlocks();
-            }
-        }, 100);
-    };
-    
     // Make updateAllLinksBlocks available globally for this editor instance
     if (!window.updateAllLinksBlocks) {
         window.updateAllLinksBlocks = () => {
@@ -2567,7 +2548,7 @@ const App = () => {
             
             // Look for / pattern before cursor for existing pages
             const beforeCursor = textContent.substring(0, cursorPosition);
-            const slashMatch = beforeCursor.match(/\/([^\/\s]*?)$/);
+            const slashMatch = beforeCursor.match(/\/([^/\s]*?)$/);
             const doubleBracketMatch = beforeCursor.match(/\[\[([^\]]*?)$/);
             
             if (slashMatch && allDocumentTitles.length > 0) {
@@ -2660,68 +2641,7 @@ const App = () => {
         }
     }, [db, userId, appId]);
 
-    const insertInternalLink = useCallback(async (targetDoc) => {
-        try {
-            if (!linkAutocomplete.range || !targetDoc) return;
-
-            const selection = window.getSelection();
-            selection.removeAllRanges();
-            
-            // Extend range to include the full trigger pattern
-            const textNode = linkAutocomplete.range.startContainer;
-            const fullRange = document.createRange();
-            fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
-            fullRange.setEnd(textNode, linkAutocomplete.range.endOffset + linkAutocomplete.searchTerm.length);
-            
-            selection.addRange(fullRange);
-            
-            // Handle new page creation
-            if (targetDoc.isNewPage) {
-                try {
-                    // Create new document
-                    const newDoc = await handleAddDocument(
-                        { name: 'Blank Page', title: targetDoc.newPageTitle, content: '' },
-                        currentDocumentId // Set current document as parent
-                    );
-                    
-                    if (newDoc) {
-                        // Create internal link HTML with proper styling
-                        const linkHtml = `<a href="#" data-internal-link-id="${newDoc.id}" class="internal-link">${targetDoc.newPageTitle}</a>`;
-                        
-                        // Replace the [[ pattern with the link
-                        document.execCommand('insertHTML', false, linkHtml);
-                        
-                        // Update document's linked pages
-                        updateDocumentLinks(currentDocumentId, newDoc.id);
-                    }
-                } catch (error) {
-                    console.error('Error creating new page:', error);
-                    // Fallback: just insert text
-                    document.execCommand('insertHTML', false, targetDoc.newPageTitle);
-                }
-            } else {
-                // Handle existing page linking
-                const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
-                
-                // Replace the trigger pattern with the link
-                document.execCommand('insertHTML', false, linkHtml);
-                
-                // Update document's linked pages
-                updateDocumentLinks(currentDocumentId, targetDoc.id);
-            }
-            
-            // Hide autocomplete
-            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-            
-            // Trigger content save
-            if (editorElementRef.current?._richEditor?.handleChange) {
-                editorElementRef.current._richEditor.handleChange();
-            }
-        } catch (error) {
-            console.error('Error inserting internal link:', error);
-            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
-        }
-    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks, handleAddDocument]);
+    // insertInternalLink will be defined after handleAddDocument
 
     const fetchDocumentBacklinks = useCallback(async (docId) => {
         if (!db || !userId || !appId || !docId) return;
@@ -4237,7 +4157,74 @@ Return only the expanded text without any additional commentary.`;
         } finally {
             setShowTemplateMenu(false);
         }
+        
+        // Return the new document data for linking purposes
+        return newDocData;
     };
+
+    // Define insertInternalLink after handleAddDocument to avoid initialization error
+    const insertInternalLink = useCallback(async (targetDoc) => {
+        try {
+            if (!linkAutocomplete.range || !targetDoc) return;
+
+            const selection = window.getSelection();
+            selection.removeAllRanges();
+            
+            // Extend range to include the full trigger pattern
+            const textNode = linkAutocomplete.range.startContainer;
+            const fullRange = document.createRange();
+            fullRange.setStart(textNode, linkAutocomplete.range.startOffset);
+            fullRange.setEnd(textNode, linkAutocomplete.range.endOffset + linkAutocomplete.searchTerm.length);
+            
+            selection.addRange(fullRange);
+            
+            // Handle new page creation
+            if (targetDoc.isNewPage) {
+                try {
+                    // Create new document
+                    const newDoc = await handleAddDocument(
+                        { name: 'Blank Page', title: targetDoc.newPageTitle, content: '' },
+                        currentDocumentId // Set current document as parent
+                    );
+                    
+                    if (newDoc) {
+                        // Create internal link HTML with proper styling
+                        const linkHtml = `<a href="#" data-internal-link-id="${newDoc.id}" class="internal-link">${targetDoc.newPageTitle}</a>`;
+                        
+                        // Replace the [[ pattern with the link
+                        document.execCommand('insertHTML', false, linkHtml);
+                        
+                        // Update document's linked pages
+                        updateDocumentLinks(currentDocumentId, newDoc.id);
+                    }
+                } catch (error) {
+                    console.error('Error creating new page:', error);
+                    // Fallback: just insert text
+                    document.execCommand('insertHTML', false, targetDoc.newPageTitle);
+                }
+            } else {
+                // Handle existing page linking
+                const linkHtml = `<a href="#" data-internal-link-id="${targetDoc.id}" class="internal-link">${targetDoc.title}</a>`;
+                
+                // Replace the trigger pattern with the link
+                document.execCommand('insertHTML', false, linkHtml);
+                
+                // Update document's linked pages
+                updateDocumentLinks(currentDocumentId, targetDoc.id);
+            }
+            
+            // Hide autocomplete
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+            
+            // Trigger content save
+            if (editorElementRef.current?._richEditor?.handleChange) {
+                editorElementRef.current._richEditor.handleChange();
+            }
+        } catch (error) {
+            console.error('Error inserting internal link:', error);
+            setLinkAutocomplete(prev => ({ ...prev, visible: false }));
+        }
+    }, [linkAutocomplete.range, linkAutocomplete.searchTerm, currentDocumentId, updateDocumentLinks]);
 
     const addChildLinkToParent = async (parentId, childId, childTitle) => {
         if (!db || !userId || !appId || !parentId) {
