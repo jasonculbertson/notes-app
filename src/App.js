@@ -2629,9 +2629,18 @@ const App = () => {
                 const docData = docSnap.data();
                 const currentLinks = docData.linkedPages || [];
                 
-                if (!currentLinks.includes(toDocId)) {
+                // Remove duplicates and add new link if not present
+                const uniqueLinks = [...new Set(currentLinks)];
+                
+                if (!uniqueLinks.includes(toDocId)) {
                     await updateDoc(docRef, {
-                        linkedPages: [...currentLinks, toDocId],
+                        linkedPages: [...uniqueLinks, toDocId],
+                        updatedAt: new Date()
+                    });
+                } else if (currentLinks.length !== uniqueLinks.length) {
+                    // Clean up duplicates if they exist
+                    await updateDoc(docRef, {
+                        linkedPages: uniqueLinks,
                         updatedAt: new Date()
                     });
                 }
@@ -2640,6 +2649,58 @@ const App = () => {
             console.error('Error updating document links:', error);
         }
     }, [db, userId, appId]);
+
+    // Clean up duplicate links in all documents
+    const cleanupDuplicateLinks = useCallback(async () => {
+        if (!db || !userId || !appId) return;
+
+        try {
+            const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
+            const snapshot = await getDocs(notesRef);
+            
+            const cleanupPromises = [];
+            
+            snapshot.docs.forEach(doc => {
+                const data = doc.data();
+                const linkedPages = data.linkedPages || [];
+                
+                if (linkedPages.length > 0) {
+                    const uniqueLinks = [...new Set(linkedPages)];
+                    
+                    // Only update if there were duplicates
+                    if (linkedPages.length !== uniqueLinks.length) {
+                        console.log(`Cleaning up duplicates in document: ${data.title || doc.id}`);
+                        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, doc.id);
+                        cleanupPromises.push(
+                            updateDoc(docRef, {
+                                linkedPages: uniqueLinks,
+                                updatedAt: new Date()
+                            })
+                        );
+                    }
+                }
+            });
+            
+            if (cleanupPromises.length > 0) {
+                await Promise.all(cleanupPromises);
+                console.log(`Cleaned up duplicates in ${cleanupPromises.length} documents`);
+            }
+        } catch (error) {
+            console.error('Error cleaning up duplicate links:', error);
+        }
+    }, [db, userId, appId]);
+
+    // Run cleanup on app start (once)
+    useEffect(() => {
+        if (db && userId && appId && documents.length > 0) {
+            // Only run once when documents are first loaded
+            const hasRunCleanup = sessionStorage.getItem('linksCleanupRun');
+            if (!hasRunCleanup) {
+                cleanupDuplicateLinks();
+                sessionStorage.setItem('linksCleanupRun', 'true');
+            }
+        }
+    }, [db, userId, appId, documents.length, cleanupDuplicateLinks]);
 
     // insertInternalLink will be defined after handleAddDocument
 
@@ -2681,8 +2742,11 @@ const App = () => {
         const currentDoc = documents.find(doc => doc.id === currentDocumentId);
         const linkedPageIds = currentDoc?.linkedPages || [];
         
+        // Remove duplicates from linkedPageIds
+        const uniqueLinkedPageIds = [...new Set(linkedPageIds)];
+        
         // Get the actual document objects for linked pages
-        const linkedDocs = documents.filter(doc => linkedPageIds.includes(doc.id));
+        const linkedDocs = documents.filter(doc => uniqueLinkedPageIds.includes(doc.id));
         
         // Update each Links block
         linksBlocks.forEach(block => {
