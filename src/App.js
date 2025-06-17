@@ -2693,12 +2693,9 @@ const App = () => {
     // Run cleanup on app start (once)
     useEffect(() => {
         if (db && userId && appId && documents.length > 0) {
-            // Only run once when documents are first loaded
-            const hasRunCleanup = sessionStorage.getItem('linksCleanupRun');
-            if (!hasRunCleanup) {
-                cleanupDuplicateLinks();
-                sessionStorage.setItem('linksCleanupRun', 'true');
-            }
+            // Always run cleanup on app start for now (for debugging)
+            console.log('Running links cleanup...');
+            cleanupDuplicateLinks();
         }
     }, [db, userId, appId, documents.length, cleanupDuplicateLinks]);
 
@@ -2742,11 +2739,17 @@ const App = () => {
         const currentDoc = documents.find(doc => doc.id === currentDocumentId);
         const linkedPageIds = currentDoc?.linkedPages || [];
         
+        console.log('Original linkedPageIds:', linkedPageIds);
+        
         // Remove duplicates from linkedPageIds
         const uniqueLinkedPageIds = [...new Set(linkedPageIds)];
         
+        console.log('Unique linkedPageIds:', uniqueLinkedPageIds);
+        
         // Get the actual document objects for linked pages
         const linkedDocs = documents.filter(doc => uniqueLinkedPageIds.includes(doc.id));
+        
+        console.log('LinkedDocs for display:', linkedDocs.map(d => ({ id: d.id, title: d.title })));
         
         // Update each Links block
         linksBlocks.forEach(block => {
@@ -6986,6 +6989,34 @@ Answer conversational questions directly in the chat. Only create documents when
                                             <div className="text-sm font-medium">Suggest Tags</div>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                                                 AI-powered tag suggestions
+                                            </div>
+                                        </div>
+                                    </button>
+                                )}
+
+                                {/* Cleanup Links Button */}
+                                {currentDocumentId && (
+                                    <button
+                                        onClick={() => {
+                                            cleanupDuplicateLinks();
+                                            setShowPlusOverlay(false);
+                                        }}
+                                        className={`flex items-center w-full p-2 rounded-md text-left transition-colors duration-200 mb-2
+                                            ${isDarkMode ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}
+                                        `}
+                                    >
+                                        <div className={`w-8 h-8 rounded-md flex items-center justify-center mr-3
+                                            ${isDarkMode ? 'bg-red-600' : 'bg-red-100'}
+                                        `}>
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                                                <path fillRule="evenodd" d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" clipRule="evenodd"/>
+                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414L7.586 12l-1.293 1.293a1 1 0 101.414 1.414L9 13.414l2.293 2.293a1 1 0 001.414-1.414L11.414 12l1.293-1.293z" clipRule="evenodd"/>
+                                            </svg>
+                                        </div>
+                                        <div>
+                                            <div className="text-sm font-medium">Clean Duplicate Links</div>
+                                            <div className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                                Remove duplicate link entries
                                             </div>
                                         </div>
                                     </button>
