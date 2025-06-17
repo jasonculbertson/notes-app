@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
@@ -669,6 +669,10 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
     editor.oninput = handleChange;
     editor.onpaste = handleChange;
     
+    // Track consecutive Enter presses for bullet point exit
+    let lastEnterTime = 0;
+    let consecutiveEnters = 0;
+    
     // Handle keyboard shortcuts
     editor.onkeydown = (e) => {
         // Handle Tab key for indent/outdent
@@ -684,6 +688,175 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                 document.execCommand('indent');
             }
             return;
+        }
+        
+        // Handle Enter key for bullet point management
+        if (e.key === 'Enter') {
+            const currentTime = Date.now();
+            
+            // Check if this is a consecutive Enter press (within 500ms)
+            if (currentTime - lastEnterTime < 500) {
+                consecutiveEnters++;
+            } else {
+                consecutiveEnters = 1;
+            }
+            lastEnterTime = currentTime;
+            
+            // If we're in a list and hit Enter twice, exit the list
+            if (consecutiveEnters >= 2) {
+                const selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    let listItem = range.startContainer;
+                    
+                    // Find the closest list item
+                    while (listItem && listItem.nodeType !== Node.ELEMENT_NODE) {
+                        listItem = listItem.parentNode;
+                    }
+                    while (listItem && listItem.tagName !== 'LI' && listItem !== editor) {
+                        listItem = listItem.parentNode;
+                    }
+                    
+                    if (listItem && listItem.tagName === 'LI') {
+                        // Check if the current list item is empty
+                        const listItemText = listItem.textContent.trim();
+                        if (listItemText === '' || listItemText === '\u00A0') {
+                            e.preventDefault();
+                            
+                            // Remove the empty list item and create a paragraph
+                            const list = listItem.parentNode;
+                            const paragraph = document.createElement('p');
+                            paragraph.innerHTML = '<br>';
+                            
+                            // Insert the paragraph after the list
+                            list.parentNode.insertBefore(paragraph, list.nextSibling);
+                            
+                            // Remove the empty list item
+                            listItem.remove();
+                            
+                            // If the list is now empty, remove it too
+                            if (list.children.length === 0) {
+                                list.remove();
+                            }
+                            
+                            // Place cursor in the new paragraph
+                            const newRange = document.createRange();
+                            newRange.setStart(paragraph, 0);
+                            newRange.collapse(true);
+                            selection.removeAllRanges();
+                            selection.addRange(newRange);
+                            
+                            saveToUndoStack(editor.innerHTML);
+                            consecutiveEnters = 0;
+                            return;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Reset consecutive enters for any other key
+            consecutiveEnters = 0;
+        }
+        
+        // Handle space key after hyphen for auto bullet conversion
+        if (e.key === ' ') {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                let textNode = range.startContainer;
+                
+                // Make sure we're in a text node
+                if (textNode.nodeType === Node.ELEMENT_NODE) {
+                    textNode = textNode.childNodes[range.startOffset - 1];
+                }
+                
+                if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+                    const text = textNode.textContent;
+                    const cursorPos = range.startOffset;
+                    
+                    // Check if we just typed a hyphen at the start of a line
+                    if (cursorPos > 0 && text.charAt(cursorPos - 1) === '-') {
+                        // Check if this is at the beginning of a paragraph or line
+                        let isLineStart = false;
+                        
+                        if (cursorPos === 1) {
+                            // First character in the text node
+                            isLineStart = true;
+                        } else {
+                            // Check if preceded only by whitespace from start of paragraph
+                            const precedingText = text.substring(0, cursorPos - 1);
+                            isLineStart = precedingText.trim() === '';
+                        }
+                        
+                        if (isLineStart) {
+                            e.preventDefault();
+                            
+                            // Remove the hyphen and any preceding whitespace
+                            const beforeHyphen = text.substring(0, cursorPos - 1).replace(/\s+$/, '');
+                            const afterHyphen = text.substring(cursorPos);
+                            
+                            // Replace the text content
+                            textNode.textContent = beforeHyphen + afterHyphen;
+                            
+                            // Find the parent element to convert to list
+                            let parentElement = textNode.parentNode;
+                            while (parentElement && parentElement !== editor && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(parentElement.tagName)) {
+                                parentElement = parentElement.parentNode;
+                            }
+                            
+                            if (parentElement && parentElement !== editor) {
+                                // Save the content before the conversion
+                                const elementContent = Array.from(parentElement.childNodes).map(node => {
+                                    if (node === textNode) {
+                                        return beforeHyphen + afterHyphen;
+                                    }
+                                    return node.outerHTML || node.textContent;
+                                }).join('');
+                                
+                                // Create a list item
+                                const listItem = document.createElement('li');
+                                listItem.innerHTML = elementContent || '<br>';
+                                
+                                // Check if there's already a list before this element
+                                let existingList = parentElement.previousElementSibling;
+                                if (existingList && existingList.tagName === 'UL') {
+                                    // Add to existing list
+                                    existingList.appendChild(listItem);
+                                    parentElement.remove();
+                                } else {
+                                    // Create new list
+                                    const list = document.createElement('ul');
+                                    list.appendChild(listItem);
+                                    parentElement.parentNode.insertBefore(list, parentElement);
+                                    parentElement.remove();
+                                }
+                                
+                                // Place cursor in the list item
+                                const newRange = document.createRange();
+                                const newSelection = window.getSelection();
+                                
+                                // Try to place cursor after any existing content
+                                if (listItem.childNodes.length > 0) {
+                                    const lastChild = listItem.childNodes[listItem.childNodes.length - 1];
+                                    if (lastChild.nodeType === Node.TEXT_NODE) {
+                                        newRange.setStart(lastChild, beforeHyphen.length);
+                                    } else {
+                                        newRange.setStartAfter(lastChild);
+                                    }
+                                } else {
+                                    newRange.setStart(listItem, 0);
+                                }
+                                newRange.collapse(true);
+                                newSelection.removeAllRanges();
+                                newSelection.addRange(newRange);
+                                
+                                saveToUndoStack(editor.innerHTML);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         if (e.ctrlKey || e.metaKey) {
@@ -850,9 +1023,17 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
 const App = () => {
     // State variables for Firebase and authentication
     const [db, setDb] = useState(null);
-    const [userId, setUserId] = useState(null);
-    const [isAuthReady, setIsAuthReady] = useState(false);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null); // This will hold the current user's UID or null
+    const [isAuthReady, setIsAuthReady] = useState(false); // True when initial auth check is done
+    const [storage, setStorage] = useState(null);
     const [appId, setAppId] = useState(null);
+
+    // State for Login Form
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [authError, setAuthError] = useState('');
+    const [isAuthenticating, setIsAuthenticating] = useState(true); // True during initial auth check or login attempts
 
     // State variables for application data
     const [documents, setDocuments] = useState([]); // List of document metadata { id, title, content, tags, parentId, order }
@@ -1045,6 +1226,64 @@ const App = () => {
             setAiTransformToolbar(prev => ({ ...prev, visible: false }));
         }, 50); // Slightly longer delay to ensure selection is complete
     }, []); // No dependencies needed since we're using state setters directly
+
+    // Authentication Functions
+    const handleLogin = async (e) => {
+        e.preventDefault(); // Prevent page reload
+        setAuthError('');
+        if (!auth) {
+            setAuthError("Authentication service not available.");
+            return;
+        }
+        setIsAuthenticating(true); // Indicate login attempt is in progress
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            // onAuthStateChanged will handle setting userId and isAuthReady
+        } catch (error) {
+            console.error("Login Error:", error.code, error.message);
+            switch (error.code) {
+                case 'auth/user-not-found':
+                case 'auth/wrong-password':
+                    setAuthError("Invalid email or password.");
+                    break;
+                case 'auth/invalid-email':
+                    setAuthError("Please enter a valid email address.");
+                    break;
+                case 'auth/too-many-requests':
+                    setAuthError("Too many failed attempts. Please try again later.");
+                    break;
+                default:
+                    setAuthError(`Login failed: ${error.message}`);
+            }
+        } finally {
+            setIsAuthenticating(false); // Login attempt finished
+        }
+    };
+
+    const handleLogout = async () => {
+        if (!auth) return;
+        setAuthError(''); // Clear any errors
+        try {
+            await signOut(auth);
+            // onAuthStateChanged will handle state updates (userId will become null, isAuthReady false)
+            // Clean up any user-specific data in UI
+            setLlmResponse('');
+            setCurrentDocumentId(null);
+            setCurrentDocumentContent(''); // Clear HTML content
+            setCurrentDocumentTitle('');
+            setCurrentDocumentTags([]);
+            setCurrentDocumentIcon('');
+            setCurrentDocumentCoverImage('');
+            setChatHistory([]); // Clear chat history
+            setUploadedFiles([]); // Clear uploaded files
+            setGoogleLinks([]); // Clear Google links
+            setDocuments([]); // Clear documents
+            // Clear any other user-specific states
+        } catch (error) {
+            console.error("Logout Error:", error);
+            setAuthError("Failed to log out.");
+        }
+    };
 
     // Helper function to convert HTML to plain text
     const convertHtmlToPlainText = useCallback((html) => {
@@ -2000,7 +2239,8 @@ const App = () => {
     // Firebase Initialization and Authentication
     useEffect(() => {
         try {
-            const firebaseConfig = {
+            // eslint-disable-next-line no-undef
+            const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
                 apiKey: process.env.REACT_APP_FIREBASE_API_KEY,
                 authDomain: process.env.REACT_APP_FIREBASE_AUTH_DOMAIN,
                 projectId: process.env.REACT_APP_FIREBASE_PROJECT_ID,
@@ -2016,6 +2256,8 @@ const App = () => {
             if (missingVars.length > 0) {
                 console.error('Missing required Firebase environment variables:', missingVars);
                 console.error('Please check your .env file contains all required REACT_APP_FIREBASE_* variables');
+                setAuthError("Application configuration error. Please contact support.");
+                setIsAuthenticating(false);
                 return;
             }
             
@@ -2023,43 +2265,48 @@ const App = () => {
             const app = initializeApp(firebaseConfig);
             const firestore = getFirestore(app);
             const firebaseAuth = getAuth(app);
+            const firebaseStorage = getStorage(app);
 
             setDb(firestore);
+            setAuth(firebaseAuth);
+            setStorage(firebaseStorage);
             console.log('Firebase initialized successfully');
 
             const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
                 if (user) {
-                    setUserId(user.uid);
+                    setUserId(user.uid); // Set userId to the authenticated user's UID
                     setIsAuthReady(true);
+                    setAuthError(''); // Clear any auth errors once logged in
                     console.log("Firebase: User authenticated with ID:", user.uid);
                 } else {
-                    try {
-                        console.log("Firebase: No user found, signing in anonymously...");
-                        await signInAnonymously(firebaseAuth);
-                    } catch (error) {
-                        console.error("Firebase: Anonymous sign-in failed:", error);
-                        console.log("Firebase: Using fallback local user ID for development");
-                        
-                        // Fallback: create a persistent local user ID for development
-                        let localUserId = localStorage.getItem('local-user-id');
-                        if (!localUserId) {
-                            localUserId = 'local-user-' + Math.random().toString(36).substr(2, 9);
-                            localStorage.setItem('local-user-id', localUserId);
-                            console.log("Firebase: Created new persistent local user ID:", localUserId);
-                        } else {
-                            console.log("Firebase: Retrieved existing local user ID:", localUserId);
+                    // No user currently logged in
+                    setUserId(null);
+                    setIsAuthReady(false); // App is not "ready" for data operations until a user logs in
+                    // If __initial_auth_token exists, try to use it for seamless login in Canvas environment.
+                    // Otherwise, the login form will be shown.
+                    // eslint-disable-next-line no-undef
+                    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                    if (initialAuthToken) {
+                        try {
+                            await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                            // If successful, onAuthStateChanged will fire again with the user.
+                        } catch (error) {
+                            console.error("Custom token sign-in failed:", error);
+                            setAuthError("Session expired. Please log in.");
+                            // Fall through to show login form if custom token fails
                         }
-                        setUserId(localUserId);
-                        setIsAuthReady(true);
                     }
                 }
+                setIsAuthenticating(false); // Initial auth check is complete
             });
 
             return () => unsubscribe();
         } catch (error) {
             console.error("Firebase Initialization Failed:", error);
+            setAuthError("Application startup failed. Please try again.");
+            setIsAuthenticating(false);
         }
-    }, []);
+    }, []); // Empty dependency array, runs once on mount
 
     // Fetch documents and listen for real-time updates
     useEffect(() => {
@@ -2127,13 +2374,12 @@ const App = () => {
 
     // Listen for uploaded files
     useEffect(() => {
-        if (!isAuthReady || !db || !appId) {
+        if (!isAuthReady || !db || !userId || !appId) {
             return;
         }
 
-        const activeUserId = userId || 'anonymous-user';
-        const uploadedFilesCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
-        console.log("Firestore: Subscribing to uploaded files at path:", `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
+        const uploadedFilesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/uploaded_files`);
+        console.log("Firestore: Subscribing to uploaded files at path:", `artifacts/${appId}/users/${userId}/uploaded_files`);
 
         const unsubscribe = onSnapshot(uploadedFilesCollectionRef, (snapshot) => {
             const fetchedFiles = snapshot.docs.map(doc => {
@@ -2166,13 +2412,12 @@ const App = () => {
 
     // Listen for Google links
     useEffect(() => {
-        if (!isAuthReady || !db || !appId) {
+        if (!isAuthReady || !db || !userId || !appId) {
             return;
         }
 
-        const activeUserId = userId || 'anonymous-user';
-        const googleLinksCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/google_links`);
-        console.log("Firestore: Subscribing to Google links at path:", `artifacts/${appId}/users/${activeUserId}/google_links`);
+        const googleLinksCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/google_links`);
+        console.log("Firestore: Subscribing to Google links at path:", `artifacts/${appId}/users/${userId}/google_links`);
 
         const unsubscribe = onSnapshot(googleLinksCollectionRef, (snapshot) => {
             const fetchedLinks = snapshot.docs.map(doc => ({
@@ -3451,14 +3696,18 @@ Return only the expanded text without any additional commentary.`;
     }, [currentDocumentId, db, userId, appId]);
 
     const handleDeleteFile = async (fileId) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot delete file: Missing db, userId, or appId");
+            return;
+        }
+        
         if (!window.confirm('Are you sure you want to delete this file?')) return;
 
         try {
-            const activeUserId = userId || 'anonymous-user';
             console.log('Attempting to delete file with ID:', fileId);
             
             // First, try to find the file document using the provided ID
-            let fileDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, fileId);
+            let fileDocRef = doc(db, `artifacts/${appId}/users/${userId}/uploaded_files`, fileId);
             let fileDoc = await getDoc(fileDocRef);
             
             // If not found, maybe we need to search by custom ID field (for older files)
@@ -3466,7 +3715,7 @@ Return only the expanded text without any additional commentary.`;
                 console.log('Document not found with ID, searching by custom id field...');
                 
                 // Search for file with matching custom id field
-                const filesCollectionRef = collection(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`);
+                const filesCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/uploaded_files`);
                 const snapshot = await getDocs(query(filesCollectionRef));
                 
                 let foundDocId = null;
@@ -3479,7 +3728,7 @@ Return only the expanded text without any additional commentary.`;
                 });
                 
                 if (foundDocId) {
-                    fileDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, foundDocId);
+                    fileDocRef = doc(db, `artifacts/${appId}/users/${userId}/uploaded_files`, foundDocId);
                     fileDoc = await getDoc(fileDocRef);
                 } else {
                     console.error('File document not found by either method:', fileId);
@@ -3532,6 +3781,11 @@ Return only the expanded text without any additional commentary.`;
 
     // Phase 2: Re-analyze file content
     const handleReprocessFile = async (file) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot reprocess file: Missing db, userId, or appId");
+            return;
+        }
+        
         try {
             setIsProcessingFileContent(true);
             setFileContentProcessingProgress(`Re-analyzing ${file.fileName}...`);
@@ -3540,8 +3794,7 @@ Return only the expanded text without any additional commentary.`;
             const extractedContent = await extractFileContent(file, file.downloadURL);
 
             // Update the file metadata in Firestore
-            const activeUserId = userId || 'anonymous-user';
-            const fileDoc = doc(db, `artifacts/${appId}/users/${activeUserId}/uploaded_files`, file.id);
+            const fileDoc = doc(db, `artifacts/${appId}/users/${userId}/uploaded_files`, file.id);
             
             await updateDoc(fileDoc, {
                 extractedContent: extractedContent,
@@ -3626,6 +3879,11 @@ Return only the expanded text without any additional commentary.`;
 
     // File Management Functions - Phase 2: Google Links
     const handleAddGoogleLink = async (title, url) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot add Google link: Missing db, userId, or appId");
+            return;
+        }
+        
         if (!title.trim() || !url.trim()) {
             alert('Please enter both title and URL');
             return;
@@ -3671,8 +3929,7 @@ Return only the expanded text without any additional commentary.`;
                 lastProcessed: Timestamp.now()
             };
 
-            const activeUserId = userId || 'anonymous-user';
-            await addDoc(collection(db, `artifacts/${appId}/users/${activeUserId}/google_links`), linkMetadata);
+            await addDoc(collection(db, `artifacts/${appId}/users/${userId}/google_links`), linkMetadata);
             console.log('Google link added successfully');
 
             // Reset form
@@ -3690,14 +3947,18 @@ Return only the expanded text without any additional commentary.`;
     };
 
     const handleDeleteGoogleLink = async (linkId) => {
+        if (!db || !userId || !appId) {
+            console.error("Cannot delete Google link: Missing db, userId, or appId");
+            return;
+        }
+        
         if (!window.confirm('Are you sure you want to delete this link?')) return;
 
         try {
-            const activeUserId = userId || 'anonymous-user';
             console.log('Attempting to delete Google link with ID:', linkId);
-            console.log('Collection path:', `artifacts/${appId}/users/${activeUserId}/google_links`);
+            console.log('Collection path:', `artifacts/${appId}/users/${userId}/google_links`);
             
-            const linkDocRef = doc(db, `artifacts/${appId}/users/${activeUserId}/google_links`, linkId);
+            const linkDocRef = doc(db, `artifacts/${appId}/users/${userId}/google_links`, linkId);
             await deleteDoc(linkDocRef);
             console.log('Google link deleted successfully');
             setSaveStatus('Link deleted');
@@ -5196,16 +5457,58 @@ Answer conversational questions directly in the chat. Only create documents when
 
 
 
-    if (!isAuthReady) {
-        return (
-            <div className="flex items-center justify-center min-h-screen bg-gray-100 text-gray-800">
-                <div className="text-xl animate-pulse">Loading application...</div>
-            </div>
-        );
-    }
-
     return (
         <div className={`flex flex-col md:flex-row h-screen ${isDarkMode ? 'bg-gray-900 text-gray-200' : 'bg-gray-100 text-gray-800'} font-inter`}>
+            {isAuthenticating ? (
+                // Show loading spinner during initial auth check or login attempts
+                <div className="flex items-center justify-center min-h-screen w-full">
+                    <div className="text-xl animate-pulse">Loading application...</div>
+                </div>
+            ) : !userId ? ( // If userId is null, show login form
+                <div className="flex items-center justify-center min-h-screen w-full">
+                    <form onSubmit={handleLogin} className={`p-8 rounded-lg shadow-lg w-full max-w-sm
+                        ${isDarkMode ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-800'}`}>
+                        <h2 className="text-2xl font-bold mb-6 text-center">Login</h2>
+                        {authError && <p className="text-red-500 text-sm mb-4 text-center">{authError}</p>}
+                        <div className="mb-4">
+                            <label htmlFor="email" className="block text-sm font-medium mb-1">Email</label>
+                            <input
+                                type="email"
+                                id="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                className={`w-full p-2 border rounded-md
+                                    ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-200' : 'bg-gray-100 border-gray-300 text-gray-900'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                                placeholder="your@email.com"
+                                required
+                            />
+                        </div>
+                        <div className="mb-6">
+                            <label htmlFor="password" className="block text-sm font-medium mb-1">Password</label>
+                            <input
+                                type="password"
+                                id="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                className={`w-full p-2 border rounded-md
+                                    ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-200' : 'bg-gray-100 border-gray-300 text-gray-900'} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                                placeholder="Password"
+                                required
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            className={`w-full p-2 rounded-md font-semibold
+                                ${isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'} text-white transition-colors`}
+                            disabled={isAuthenticating}
+                        >
+                            {isAuthenticating ? 'Logging in...' : 'Log In'}
+                        </button>
+                    </form>
+                </div>
+            ) : ( // User is authenticated, render the main app content
+                <>
+                    {/* Your existing Sidebar and Main App content goes here */}
 
             {/* Mobile Header Bar - Visible only on small screens */}
             <div className={`flex md:hidden w-full p-4 items-center justify-between shadow-md z-20
@@ -5323,6 +5626,20 @@ Answer conversational questions directly in the chat. Only create documents when
                             </div>
                         </div>
                     )}
+                </div>
+
+                {/* Logout Section */}
+                <div className={`mt-auto p-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                    <div className={`text-xs mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        Logged in as: {auth?.currentUser?.email || 'N/A'}
+                    </div>
+                    <button
+                        onClick={handleLogout}
+                        className={`w-full px-3 py-2 rounded-md text-sm font-medium
+                            ${isDarkMode ? 'bg-red-600 hover:bg-red-700' : 'bg-red-500 hover:bg-red-600'} text-white transition-colors`}
+                    >
+                        Log Out
+                    </button>
                 </div>
 
                 {/* Documents List */}
@@ -6983,6 +7300,8 @@ Answer conversational questions directly in the chat. Only create documents when
                         </div>
                     </div>
                 </div>
+            )}
+                </>
             )}
         </div>
     );
