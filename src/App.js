@@ -2661,8 +2661,11 @@ const App = () => {
         }
 
         try {
+            console.log('Fetching documents from Firestore...');
             const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
             const snapshot = await getDocs(notesRef);
+            
+            console.log(`Found ${snapshot.docs.length} documents in Firestore`);
             
             const cleanupPromises = [];
             
@@ -2670,12 +2673,22 @@ const App = () => {
                 const data = doc.data();
                 const linkedPages = data.linkedPages || [];
                 
+                console.log(`Document "${data.title || doc.id}":`, {
+                    id: doc.id,
+                    title: data.title,
+                    linkedPages: linkedPages,
+                    linkedPagesLength: linkedPages.length
+                });
+                
                 if (linkedPages.length > 0) {
                     const uniqueLinks = [...new Set(linkedPages)];
                     
+                    console.log(`  Original links: [${linkedPages.join(', ')}]`);
+                    console.log(`  Unique links: [${uniqueLinks.join(', ')}]`);
+                    
                     // Only update if there were duplicates
                     if (linkedPages.length !== uniqueLinks.length) {
-                        console.log(`Cleaning up duplicates in document: ${data.title || doc.id}`);
+                        console.log(`  ✅ Found duplicates! Will clean up document: ${data.title || doc.id}`);
                         const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, doc.id);
                         cleanupPromises.push(
                             updateDoc(docRef, {
@@ -2683,16 +2696,25 @@ const App = () => {
                                 updatedAt: new Date()
                             })
                         );
+                    } else {
+                        console.log(`  ✓ No duplicates found in document: ${data.title || doc.id}`);
                     }
+                } else {
+                    console.log(`  ✓ No linked pages in document: ${data.title || doc.id}`);
                 }
             });
             
+            console.log(`Total cleanup operations needed: ${cleanupPromises.length}`);
+            
             if (cleanupPromises.length > 0) {
+                console.log('Executing cleanup operations...');
                 await Promise.all(cleanupPromises);
-                console.log(`Cleaned up duplicates in ${cleanupPromises.length} documents`);
+                console.log(`✅ Successfully cleaned up duplicates in ${cleanupPromises.length} documents`);
+            } else {
+                console.log('✓ No duplicate links found - no cleanup needed');
             }
         } catch (error) {
-            console.error('Error cleaning up duplicate links:', error);
+            console.error('❌ Error cleaning up duplicate links:', error);
         }
     }, [db, userId, appId]);
 
