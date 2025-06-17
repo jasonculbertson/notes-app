@@ -2652,7 +2652,13 @@ const App = () => {
 
     // Clean up duplicate links in all documents
     const cleanupDuplicateLinks = useCallback(async () => {
-        if (!db || !userId || !appId) return;
+        console.log('cleanupDuplicateLinks function called');
+        console.log('DB ready:', !!db, 'User ID:', !!userId, 'App ID:', !!appId);
+        
+        if (!db || !userId || !appId) {
+            console.log('Missing required params for cleanup:', { db: !!db, userId: !!userId, appId: !!appId });
+            return;
+        }
 
         try {
             const notesRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
@@ -6542,7 +6548,11 @@ Answer conversational questions directly in the chat. Only create documents when
 
                             {/* Temporary Cleanup Button for Debugging */}
                             <button
-                                onClick={cleanupDuplicateLinks}
+                                onClick={() => {
+                                    console.log('Manual cleanup button clicked');
+                                    console.log('Current documents:', documents.map(d => ({ id: d.id, title: d.title, linkedPages: d.linkedPages })));
+                                    cleanupDuplicateLinks();
+                                }}
                                 className={`mb-2 px-3 py-1 text-xs rounded-md transition-colors
                                     ${isDarkMode ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}
                                 `}
