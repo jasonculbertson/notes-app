@@ -2695,6 +2695,7 @@ const App = () => {
         if (db && userId && appId && documents.length > 0) {
             // Always run cleanup on app start for now (for debugging)
             console.log('Running links cleanup...');
+            console.log('Current documents:', documents.map(d => ({ id: d.id, title: d.title, linkedPages: d.linkedPages })));
             cleanupDuplicateLinks();
         }
     }, [db, userId, appId, documents.length, cleanupDuplicateLinks]);
@@ -6538,6 +6539,16 @@ Answer conversational questions directly in the chat. Only create documents when
                                     </div>
                                 )}
                             </div>
+
+                            {/* Temporary Cleanup Button for Debugging */}
+                            <button
+                                onClick={cleanupDuplicateLinks}
+                                className={`mb-2 px-3 py-1 text-xs rounded-md transition-colors
+                                    ${isDarkMode ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}
+                                `}
+                            >
+                                🧹 Clean Duplicate Links (Debug)
+                            </button>
                         </>
                     )}
                     {/* Editor.js Integration with Fallback */}
