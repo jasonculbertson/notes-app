@@ -130,6 +130,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         { text: 'H3', command: 'formatBlock', value: 'h3', title: 'Heading 3' },
         { text: '•', command: 'insertUnorderedList', title: 'Bullet List' },
         { text: '1.', command: 'insertOrderedList', title: 'Numbered List' },
+        { text: '☐', command: 'insertCheckList', title: 'Checklist' },
         { text: '"', command: 'formatBlock', value: 'blockquote', title: 'Quote' },
         { text: 'P', command: 'formatBlock', value: 'p', title: 'Paragraph' },
         { text: '─', command: 'insertDivider', title: 'Divider' }
@@ -382,6 +383,10 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                 // Save current state before inserting list
                 saveToUndoStack(editor.innerHTML);
                 insertList('ol');
+            } else if (btn.command === 'insertCheckList') {
+                // Save current state before inserting checklist
+                saveToUndoStack(editor.innerHTML);
+                insertCheckList();
             } else if (btn.value) {
                 // Save current state before formatting
                 saveToUndoStack(editor.innerHTML);
@@ -580,6 +585,108 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         }
     };
     
+    const insertCheckList = () => {
+        const selection = window.getSelection();
+        const range = selection.getRangeAt(0);
+        
+        // Get the current line/block element
+        let currentElement = range.commonAncestorContainer;
+        if (currentElement.nodeType === Node.TEXT_NODE) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        // Find the closest block element
+        while (currentElement && currentElement !== editor && 
+               !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'BLOCKQUOTE', 'LI'].includes(currentElement.tagName)) {
+            currentElement = currentElement.parentElement;
+        }
+        
+        if (currentElement && currentElement !== editor) {
+            // Get the text content
+            const textContent = currentElement.textContent || '';
+            
+            // Create new checklist element
+            const checklistElement = document.createElement('ul');
+            checklistElement.className = 'checklist';
+            const listItem = document.createElement('li');
+            listItem.className = 'checklist-item';
+            
+            // Create checkbox and text content
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'checklist-checkbox';
+            checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
+            
+            const textSpan = document.createElement('span');
+            textSpan.textContent = textContent || '';
+            textSpan.contentEditable = true;
+            textSpan.style.cssText = 'outline: none; display: inline-block; min-width: 1px;';
+            if (!textContent) {
+                textSpan.innerHTML = '&nbsp;'; // Use non-breaking space for empty spans
+            }
+            
+            listItem.appendChild(checkbox);
+            listItem.appendChild(textSpan);
+            checklistElement.appendChild(listItem);
+            
+            // Replace the current element
+            currentElement.parentNode.replaceChild(checklistElement, currentElement);
+            
+            // Set cursor in the text span
+            setTimeout(() => {
+                textSpan.focus();
+                const newRange = document.createRange();
+                const newSelection = window.getSelection();
+                
+                // Select all content in the span and collapse to start
+                newRange.selectNodeContents(textSpan);
+                newRange.collapse(true);
+                newSelection.removeAllRanges();
+                newSelection.addRange(newRange);
+                
+                // Clear the non-breaking space when user starts typing (only if it was empty)
+                if (!textContent) {
+                    const clearPlaceholder = () => {
+                        if (textSpan.innerHTML === '&nbsp;') {
+                            textSpan.innerHTML = '';
+                        }
+                        textSpan.removeEventListener('input', clearPlaceholder);
+                    };
+                    textSpan.addEventListener('input', clearPlaceholder);
+                }
+            }, 0);
+        } else {
+            // No current block element, insert a new checklist
+            const checklistHtml = `<ul class="checklist"><li class="checklist-item"><input type="checkbox" class="checklist-checkbox" style="margin-right: 8px; cursor: pointer;"><span contenteditable="true" style="outline: none; display: inline-block; min-width: 1px;">&nbsp;</span></li></ul><p><br></p>`;
+            document.execCommand('insertHTML', false, checklistHtml);
+            
+            // Fix cursor positioning for the inserted checklist
+            setTimeout(() => {
+                const insertedSpan = editor.querySelector('.checklist-item span[contenteditable]');
+                if (insertedSpan) {
+                    insertedSpan.focus();
+                    const newRange = document.createRange();
+                    const newSelection = window.getSelection();
+                    
+                    // Select all content in the span and collapse to start
+                    newRange.selectNodeContents(insertedSpan);
+                    newRange.collapse(true);
+                    newSelection.removeAllRanges();
+                    newSelection.addRange(newRange);
+                    
+                    // Clear the non-breaking space when user starts typing
+                    const clearPlaceholder = () => {
+                        if (insertedSpan.innerHTML === '&nbsp;') {
+                            insertedSpan.innerHTML = '';
+                        }
+                        insertedSpan.removeEventListener('input', clearPlaceholder);
+                    };
+                    insertedSpan.addEventListener('input', clearPlaceholder);
+                }
+            }, 0);
+        }
+    };
+    
     // Create editor
     const editor = document.createElement('div');
     editor.contentEditable = true;
@@ -601,6 +708,41 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
         word-wrap: break-word;
         overflow-wrap: break-word;
     `;
+    
+    // Add checklist styles
+    const checklistStyles = document.createElement('style');
+    checklistStyles.textContent = `
+        .checklist {
+            list-style: none !important;
+            padding-left: 0 !important;
+            margin: 16px 0 !important;
+        }
+        .checklist-item {
+            display: flex !important;
+            align-items: center !important;
+            margin-bottom: 8px !important;
+            padding: 0 !important;
+            list-style: none !important;
+        }
+        .checklist-checkbox {
+            margin-right: 8px !important;
+            margin-top: 0px !important;
+            cursor: pointer !important;
+            flex-shrink: 0 !important;
+        }
+        .checklist-item span {
+            flex: 1 !important;
+            outline: none !important;
+        }
+        .checklist-item span:focus {
+            background-color: rgba(59, 130, 246, 0.1) !important;
+            border-radius: 2px !important;
+        }
+    `;
+    if (!document.head.querySelector('style[data-checklist-styles]')) {
+        checklistStyles.setAttribute('data-checklist-styles', 'true');
+        document.head.appendChild(checklistStyles);
+    }
     
     // Set initial content
     if (initialContent && initialContent.trim() && initialContent !== '<p>Start writing your note...</p>') {
@@ -698,6 +840,80 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
             return;
         }
         
+        // Handle Backspace/Delete key for checklist items
+        if (e.key === 'Backspace' || e.key === 'Delete') {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                let currentNode = range.startContainer;
+                
+                // Find the closest checklist item
+                while (currentNode && currentNode !== editor) {
+                    if (currentNode.nodeType === Node.ELEMENT_NODE && 
+                        currentNode.tagName === 'LI' && 
+                        currentNode.classList.contains('checklist-item')) {
+                        
+                        const textSpan = currentNode.querySelector('span[contenteditable]');
+                        if (textSpan) {
+                            // Check if cursor is at the beginning of the text span and it's empty or only has nbsp
+                            const isAtStart = range.startOffset === 0 && range.startContainer === textSpan;
+                            const isEmpty = !textSpan.textContent.trim() || textSpan.innerHTML === '&nbsp;';
+                            const isAtTextStart = range.startContainer.nodeType === Node.TEXT_NODE && 
+                                                 range.startOffset === 0 && 
+                                                 range.startContainer.parentNode === textSpan;
+                            
+                            if ((isAtStart || isAtTextStart) && (isEmpty || e.key === 'Backspace')) {
+                                e.preventDefault();
+                                
+                                // Convert checklist item back to paragraph
+                                const textContent = textSpan.textContent.replace(/\u00A0/g, '').trim();
+                                const list = currentNode.parentNode;
+                                
+                                // Create a new paragraph with the text content
+                                const paragraph = document.createElement('p');
+                                if (textContent) {
+                                    paragraph.textContent = textContent;
+                                } else {
+                                    paragraph.innerHTML = '<br>';
+                                }
+                                
+                                // Insert the paragraph before the list
+                                list.parentNode.insertBefore(paragraph, list);
+                                
+                                // Remove the checklist item
+                                currentNode.remove();
+                                
+                                // If the list is now empty, remove it too
+                                if (list.children.length === 0) {
+                                    list.remove();
+                                }
+                                
+                                // Place cursor in the new paragraph
+                                const newRange = document.createRange();
+                                const newSelection = window.getSelection();
+                                
+                                if (textContent) {
+                                    // Place cursor at the beginning of the text
+                                    newRange.setStart(paragraph.firstChild, 0);
+                                } else {
+                                    // Place cursor in empty paragraph
+                                    newRange.setStart(paragraph, 0);
+                                }
+                                newRange.collapse(true);
+                                newSelection.removeAllRanges();
+                                newSelection.addRange(newRange);
+                                
+                                saveToUndoStack(editor.innerHTML);
+                                return;
+                            }
+                        }
+                        break;
+                    }
+                    currentNode = currentNode.parentNode;
+                }
+            }
+        }
+        
         // Handle Enter key for bullet point management
         if (e.key === 'Enter') {
             const currentTime = Date.now();
@@ -726,8 +942,20 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                     }
                     
                     if (listItem && listItem.tagName === 'LI') {
+                        // Check if it's a checklist item
+                        const isChecklistItem = listItem.classList.contains('checklist-item');
+                        
                         // Check if the current list item is empty
-                        const listItemText = listItem.textContent.trim();
+                        let listItemText;
+                        if (isChecklistItem) {
+                            // For checklist items, get text from the span element
+                            const textSpan = listItem.querySelector('span[contenteditable]');
+                            listItemText = textSpan ? textSpan.textContent.trim() : '';
+                        } else {
+                            // For regular list items
+                            listItemText = listItem.textContent.trim();
+                        }
+                        
                         if (listItemText === '' || listItemText === '\u00A0') {
                             e.preventDefault();
                             
@@ -758,6 +986,79 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                             consecutiveEnters = 0;
                             return;
                         }
+                    }
+                }
+            }
+            
+            // Handle single Enter press in checklist items to create new checklist item
+            if (consecutiveEnters === 1) {
+                const selection = window.getSelection();
+                if (selection.rangeCount > 0) {
+                    const range = selection.getRangeAt(0);
+                    let listItem = range.startContainer;
+                    
+                    // Find the closest list item
+                    while (listItem && listItem.nodeType !== Node.ELEMENT_NODE) {
+                        listItem = listItem.parentNode;
+                    }
+                    while (listItem && listItem.tagName !== 'LI' && listItem !== editor) {
+                        listItem = listItem.parentNode;
+                    }
+                    
+                    if (listItem && listItem.tagName === 'LI' && listItem.classList.contains('checklist-item')) {
+                        e.preventDefault();
+                        
+                        // Create a new checklist item
+                        const newListItem = document.createElement('li');
+                        newListItem.className = 'checklist-item';
+                        
+                        // Create checkbox and text content
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.className = 'checklist-checkbox';
+                        checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
+                        
+                        const textSpan = document.createElement('span');
+                        textSpan.contentEditable = true;
+                        textSpan.style.cssText = 'outline: none; display: inline-block; min-width: 1px;';
+                        textSpan.innerHTML = '&nbsp;'; // Use non-breaking space to ensure cursor positioning
+                        
+                        newListItem.appendChild(checkbox);
+                        newListItem.appendChild(textSpan);
+                        
+                        // Insert the new item after the current one
+                        const list = listItem.parentNode;
+                        if (listItem.nextSibling) {
+                            list.insertBefore(newListItem, listItem.nextSibling);
+                        } else {
+                            list.appendChild(newListItem);
+                        }
+                        
+                        // Place cursor in the new text span
+                        setTimeout(() => {
+                            textSpan.focus();
+                            const newRange = document.createRange();
+                            const newSelection = window.getSelection();
+                            
+                            // Select all content in the span and collapse to start
+                            newRange.selectNodeContents(textSpan);
+                            newRange.collapse(true);
+                            newSelection.removeAllRanges();
+                            newSelection.addRange(newRange);
+                            
+                            // Clear the non-breaking space when user starts typing
+                            const clearPlaceholder = () => {
+                                if (textSpan.innerHTML === '&nbsp;') {
+                                    textSpan.innerHTML = '';
+                                }
+                                textSpan.removeEventListener('input', clearPlaceholder);
+                            };
+                            textSpan.addEventListener('input', clearPlaceholder);
+                        }, 0);
+                        
+                        saveToUndoStack(editor.innerHTML);
+                        consecutiveEnters = 0;
+                        return;
                     }
                 }
             }
@@ -860,6 +1161,186 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
                                 
                                 saveToUndoStack(editor.innerHTML);
                                 return;
+                            }
+                        }
+                    }
+                    
+                    // Check if we just typed a number at the start of a line for auto numbered list conversion
+                    if (cursorPos > 0) {
+                        // Look for a number pattern at the start of the line (before the space we just typed)
+                        const beforeSpace = text.substring(0, cursorPos - 1);
+                        const numberMatch = beforeSpace.match(/^(\s*)(\d+)$/);
+                        
+                        if (numberMatch) {
+                            const whitespace = numberMatch[1];
+                            const number = numberMatch[2];
+                            
+                            // Check if this is at the beginning of a paragraph or line
+                            let isLineStart = whitespace.length === 0;
+                            
+                            if (isLineStart) {
+                                e.preventDefault();
+                                
+                                // Remove the number completely and keep everything after the space
+                                const afterSpace = text.substring(cursorPos);
+                                const newTextContent = afterSpace;
+                                
+                                // Replace the text content (removing the number completely)
+                                textNode.textContent = newTextContent;
+                                
+                                // Find the parent element to convert to list
+                                let parentElement = textNode.parentNode;
+                                while (parentElement && parentElement !== editor && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(parentElement.tagName)) {
+                                    parentElement = parentElement.parentNode;
+                                }
+                                
+                                if (parentElement && parentElement !== editor) {
+                                    // Save the content after removing the number
+                                    const elementContent = Array.from(parentElement.childNodes).map(node => {
+                                        if (node === textNode) {
+                                            return newTextContent;
+                                        }
+                                        return node.outerHTML || node.textContent;
+                                    }).join('');
+                                    
+                                    // Create a list item
+                                    const listItem = document.createElement('li');
+                                    listItem.innerHTML = elementContent || '<br>';
+                                    
+                                    // Check if there's already an ordered list before this element
+                                    let existingList = parentElement.previousElementSibling;
+                                    if (existingList && existingList.tagName === 'OL') {
+                                        // Add to existing ordered list
+                                        existingList.appendChild(listItem);
+                                        parentElement.remove();
+                                    } else {
+                                        // Create new ordered list
+                                        const list = document.createElement('ol');
+                                        list.appendChild(listItem);
+                                        parentElement.parentNode.insertBefore(list, parentElement);
+                                        parentElement.remove();
+                                    }
+                                    
+                                    // Place cursor in the list item
+                                    const newRange = document.createRange();
+                                    const newSelection = window.getSelection();
+                                    
+                                    // Try to place cursor at the beginning of the list item content
+                                    if (listItem.childNodes.length > 0) {
+                                        const firstChild = listItem.childNodes[0];
+                                        if (firstChild.nodeType === Node.TEXT_NODE) {
+                                            newRange.setStart(firstChild, 0);
+                                        } else {
+                                            newRange.setStart(listItem, 0);
+                                        }
+                                    } else {
+                                        newRange.setStart(listItem, 0);
+                                    }
+                                    newRange.collapse(true);
+                                    newSelection.removeAllRanges();
+                                    newSelection.addRange(newRange);
+                                    
+                                    saveToUndoStack(editor.innerHTML);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Check if we just typed a checklist pattern (- [ ] or - [x]) at the start of a line
+                    if (cursorPos > 0) {
+                        // Look for checklist patterns: "- [ ]" or "- [x]"
+                        const beforeSpace = text.substring(0, cursorPos - 1);
+                        const checklistMatch = beforeSpace.match(/^(\s*)-\s*\[([x\s])\]$/);
+                        
+                        if (checklistMatch) {
+                            const whitespace = checklistMatch[1];
+                            const isChecked = checklistMatch[2] === 'x';
+                            
+                            // Check if this is at the beginning of a paragraph or line
+                            let isLineStart = whitespace.length === 0;
+                            
+                            if (isLineStart) {
+                                e.preventDefault();
+                                
+                                // Remove the checklist pattern completely and keep everything after the space
+                                const afterSpace = text.substring(cursorPos);
+                                const newTextContent = afterSpace;
+                                
+                                // Replace the text content (removing the pattern completely)
+                                textNode.textContent = newTextContent;
+                                
+                                // Find the parent element to convert to checklist
+                                let parentElement = textNode.parentNode;
+                                while (parentElement && parentElement !== editor && !['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(parentElement.tagName)) {
+                                    parentElement = parentElement.parentNode;
+                                }
+                                
+                                if (parentElement && parentElement !== editor) {
+                                    // Save the content after removing the pattern
+                                    const elementContent = Array.from(parentElement.childNodes).map(node => {
+                                        if (node === textNode) {
+                                            return newTextContent;
+                                        }
+                                        return node.outerHTML || node.textContent;
+                                    }).join('');
+                                    
+                                    // Create a checklist item
+                                    const checklistElement = document.createElement('ul');
+                                    checklistElement.className = 'checklist';
+                                    const listItem = document.createElement('li');
+                                    listItem.className = 'checklist-item';
+                                    
+                                    // Create checkbox and text content
+                                    const checkbox = document.createElement('input');
+                                    checkbox.type = 'checkbox';
+                                    checkbox.className = 'checklist-checkbox';
+                                    checkbox.checked = isChecked;
+                                    checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
+                                    
+                                    const textSpan = document.createElement('span');
+                                    textSpan.innerHTML = elementContent || '';
+                                    textSpan.contentEditable = true;
+                                    textSpan.style.cssText = 'outline: none;';
+                                    
+                                    listItem.appendChild(checkbox);
+                                    listItem.appendChild(textSpan);
+                                    
+                                    // Check if there's already a checklist before this element
+                                    let existingList = parentElement.previousElementSibling;
+                                    if (existingList && existingList.tagName === 'UL' && existingList.className === 'checklist') {
+                                        // Add to existing checklist
+                                        existingList.appendChild(listItem);
+                                        parentElement.remove();
+                                    } else {
+                                        // Create new checklist
+                                        checklistElement.appendChild(listItem);
+                                        parentElement.parentNode.insertBefore(checklistElement, parentElement);
+                                        parentElement.remove();
+                                    }
+                                    
+                                    // Place cursor in the text span
+                                    const newRange = document.createRange();
+                                    const newSelection = window.getSelection();
+                                    
+                                    // Try to place cursor at the beginning of the text span
+                                    if (textSpan.childNodes.length > 0) {
+                                        const firstChild = textSpan.childNodes[0];
+                                        if (firstChild.nodeType === Node.TEXT_NODE) {
+                                            newRange.setStart(firstChild, 0);
+                                        } else {
+                                            newRange.setStart(textSpan, 0);
+                                        }
+                                    } else {
+                                        newRange.setStart(textSpan, 0);
+                                    }
+                                    newRange.collapse(true);
+                                    newSelection.removeAllRanges();
+                                    newSelection.addRange(newRange);
+                                    
+                                    saveToUndoStack(editor.innerHTML);
+                                    return;
+                                }
                             }
                         }
                     }
@@ -2545,6 +3026,8 @@ const App = () => {
             // Get text content around cursor
             const textNode = range.startContainer;
             if (textNode.nodeType !== Node.TEXT_NODE) return;
+
+
 
             const textContent = textNode.textContent;
             const cursorPosition = range.startOffset;
