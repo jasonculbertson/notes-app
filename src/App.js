@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
@@ -1523,6 +1523,7 @@ const App = () => {
     const [password, setPassword] = useState('');
     const [authError, setAuthError] = useState('');
     const [isAuthenticating, setIsAuthenticating] = useState(true); // True during initial auth check or login attempts
+    const [isLoginMode, setIsLoginMode] = useState(true); // NEW: true to show login form, false to show signup form
 
     // State variables for application data
     const [documents, setDocuments] = useState([]); // List of document metadata { id, title, content, tags, parentId, order }
@@ -1644,78 +1645,7 @@ const App = () => {
         }
     }, [aiTagSuggestions]);
 
-    // Handle text selection for contextual Q&A and AI Transformation - Moved early to avoid hoisting issues
-    const handleTextSelection = useCallback(() => {
-        console.log("Text selection handler triggered");
-        
-        // Small delay to ensure selection is finalized
-        setTimeout(() => {
-            const selection = window.getSelection();
-            const selectedTextContent = selection.toString().trim();
-            
-            console.log("Selected text:", selectedTextContent, "Length:", selectedTextContent.length);
-            
-            if (selectedTextContent.length > 3 && selection.rangeCount > 0) { // Require at least 3 characters
-                const range = selection.getRangeAt(0);
-                const rect = range.getBoundingClientRect();
-                
-                // Check if the selection is visible and has dimensions
-                if (rect.width > 0 && rect.height > 0) {
-                    // Check if selection is within the editor area
-                    const editorElement = editorElementRef.current;
-                    if (editorElement) {
-                        const selectionContainer = range.commonAncestorContainer;
-                        
-                        // More robust check for whether selection is within editor
-                        const isWithinEditor = editorElement.contains(selectionContainer) || 
-                            (selectionContainer.nodeType === Node.TEXT_NODE && 
-                             editorElement.contains(selectionContainer.parentNode)) ||
-                            // Also check if any part of the range intersects with editor
-                            editorElement.contains(range.startContainer) ||
-                            editorElement.contains(range.endContainer);
-                        
-                        if (isWithinEditor) {
-                            console.log("Valid selection within editor detected");
-                            
-                            // Feature 1: AI Transformation Toolbar - Show with delay to avoid flicker
-                            setTimeout(() => {
-                                // Double-check selection is still valid
-                                const currentSelection = window.getSelection();
-                                if (currentSelection.toString().trim().length > 3) {
-                                    const currentRange = currentSelection.rangeCount > 0 ? currentSelection.getRangeAt(0) : null;
-                                    if (currentRange) {
-                                        const currentRect = currentRange.getBoundingClientRect();
-                                        setAiTransformToolbar({
-                                            visible: true,
-                                            x: currentRect.left + (currentRect.width / 2) - 100, // Center toolbar (assuming ~200px width)
-                                            y: currentRect.top - 40, // Position above selection
-                                            selectedText: currentSelection.toString().trim(),
-                                            selectedRange: currentRange.cloneRange() // Store a copy of the range
-                                        });
-                                    }
-                                }
-                            }, 200); // 200ms delay to prevent flicker
-                            
-                            console.log("Showing AI toolbar at position:", {
-                                x: rect.left + (rect.width / 2),
-                                y: rect.top - 40
-                            });
-                            return;
-                        } else {
-                            console.log("Selection not within editor area");
-                        }
-                    }
-                } else {
-                    console.log("Selection has no visible dimensions");
-                }
-            } else {
-                console.log("Selection too short or no range:", selectedTextContent.length);
-            }
-            
-            // Hide AI toolbar if no valid selection
-            setAiTransformToolbar(prev => ({ ...prev, visible: false }));
-        }, 50); // Slightly longer delay to ensure selection is complete
-    }, []); // No dependencies needed since we're using state setters directly
+
 
     // Authentication Functions
     const handleLogin = async (e) => {
@@ -1747,6 +1677,53 @@ const App = () => {
             }
         } finally {
             setIsAuthenticating(false); // Login attempt finished
+        }
+    };
+
+    const handleSignUp = async (e) => {
+        e.preventDefault(); // Prevent default form submission behavior (page reload)
+        setAuthError(''); // Clear any previous authentication errors
+        if (!auth) { // Ensure Firebase Auth service is initialized
+            setAuthError("Authentication service not available.");
+            return;
+        }
+        setIsAuthenticating(true); // Set loading state during the sign-up attempt
+
+        try {
+            // Firebase function to create a new user with email and password
+            await createUserWithEmailAndPassword(auth, email, password);
+
+            // If successful, the onAuthStateChanged listener (which you already have)
+            // will automatically detect the new user and update your userId state,
+            // rendering the main application.
+            // No need for explicit setUserId(auth.currentUser.uid) here.
+
+            // Optional: If you want to store additional user profile data immediately in Firestore upon signup:
+            // const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            // await setDoc(doc(db, `artifacts/${appId}/users`, auth.currentUser.uid), {
+            //     email: auth.currentUser.email,
+            //     createdAt: new Date().toISOString(),
+            //     // Add other default profile info here if needed
+            // });
+
+        } catch (error) {
+            console.error("Sign Up Error:", error.code, error.message); // Log the error for debugging
+            // Display user-friendly error messages based on Firebase error codes
+            switch (error.code) {
+                case 'auth/email-already-in-use':
+                    setAuthError("This email is already in use. Please log in or use a different email.");
+                    break;
+                case 'auth/weak-password':
+                    setAuthError("Password is too weak. Please choose a stronger password (at least 6 characters).");
+                    break;
+                case 'auth/invalid-email':
+                    setAuthError("Please enter a valid email address.");
+                    break;
+                default:
+                    setAuthError(`Sign up failed: ${error.message}`); // Generic fallback for other errors
+            }
+        } finally {
+            setIsAuthenticating(false); // Reset loading state after the attempt
         }
     };
 
@@ -2647,6 +2624,79 @@ const App = () => {
 
     // Simple, reliable editor state
     const [editorReady, setEditorReady] = useState(false);
+
+    // Handle text selection for contextual Q&A and AI Transformation
+    const handleTextSelection = useCallback(() => {
+        console.log("Text selection handler triggered");
+        
+        // Small delay to ensure selection is finalized
+        setTimeout(() => {
+            const selection = window.getSelection();
+            const selectedTextContent = selection.toString().trim();
+            
+            console.log("Selected text:", selectedTextContent, "Length:", selectedTextContent.length);
+            
+            if (selectedTextContent.length > 3 && selection.rangeCount > 0) { // Require at least 3 characters
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                
+                // Check if the selection is visible and has dimensions
+                if (rect.width > 0 && rect.height > 0) {
+                    // Check if selection is within the editor area
+                    const editorElement = editorElementRef.current;
+                    if (editorElement) {
+                        const selectionContainer = range.commonAncestorContainer;
+                        
+                        // More robust check for whether selection is within editor
+                        const isWithinEditor = editorElement.contains(selectionContainer) || 
+                            (selectionContainer.nodeType === Node.TEXT_NODE && 
+                             editorElement.contains(selectionContainer.parentNode)) ||
+                            // Also check if any part of the range intersects with editor
+                            editorElement.contains(range.startContainer) ||
+                            editorElement.contains(range.endContainer);
+                        
+                        if (isWithinEditor) {
+                            console.log("Valid selection within editor detected");
+                            
+                            // Feature 1: AI Transformation Toolbar - Show with delay to avoid flicker
+                            setTimeout(() => {
+                                // Double-check selection is still valid
+                                const currentSelection = window.getSelection();
+                                if (currentSelection.toString().trim().length > 3) {
+                                    const currentRange = currentSelection.rangeCount > 0 ? currentSelection.getRangeAt(0) : null;
+                                    if (currentRange) {
+                                        const currentRect = currentRange.getBoundingClientRect();
+                                        setAiTransformToolbar({
+                                            visible: true,
+                                            x: currentRect.left + (currentRect.width / 2) - 100, // Center toolbar (assuming ~200px width)
+                                            y: currentRect.top - 40, // Position above selection
+                                            selectedText: currentSelection.toString().trim(),
+                                            selectedRange: currentRange.cloneRange() // Store a copy of the range
+                                        });
+                                    }
+                                }
+                            }, 200); // 200ms delay to prevent flicker
+                            
+                            console.log("Showing AI toolbar at position:", {
+                                x: rect.left + (rect.width / 2),
+                                y: rect.top - 40
+                            });
+                            return;
+                        } else {
+                            console.log("Selection not within editor area");
+                        }
+                    }
+                } else {
+                    console.log("Selection has no visible dimensions");
+                }
+            } else {
+                console.log("Selection too short or no range:", selectedTextContent.length);
+            }
+            
+            // Hide AI toolbar if no valid selection
+            setAiTransformToolbar(prev => ({ ...prev, visible: false }));
+        }, 50); // Slightly longer delay to ensure selection is complete
+    }, []); // No dependencies needed since we're using state setters directly
 
     // Initialize simple rich text editor immediately
     useEffect(() => {
@@ -6275,12 +6325,18 @@ Answer conversational questions directly in the chat. Only create documents when
                 <div className="flex items-center justify-center min-h-screen w-full">
                     <div className="text-xl animate-pulse">Loading application...</div>
                 </div>
-            ) : !userId ? ( // If userId is null, show login form
+            ) : !userId ? ( // If userId is null (user is not logged in), show the authentication form
                 <div className="flex items-center justify-center min-h-screen w-full">
-                    <form onSubmit={handleLogin} className={`p-8 rounded-lg shadow-lg w-full max-w-sm
-                        ${isDarkMode ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-800'}`}>
-                        <h2 className="text-2xl font-bold mb-6 text-center">Login</h2>
+                    <form onSubmit={isLoginMode ? handleLogin : handleSignUp} // Dynamic form submission handler
+                          className={`p-8 rounded-lg shadow-lg w-full max-w-sm
+                            ${isDarkMode ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-800'}`}>
+
+                        <h2 className="text-2xl font-bold mb-6 text-center">
+                            {isLoginMode ? 'Login' : 'Sign Up'} {/* Dynamic form title */}
+                        </h2>
+
                         {authError && <p className="text-red-500 text-sm mb-4 text-center">{authError}</p>}
+
                         <div className="mb-4">
                             <label htmlFor="email" className="block text-sm font-medium mb-1">Email</label>
                             <input
@@ -6294,6 +6350,7 @@ Answer conversational questions directly in the chat. Only create documents when
                                 required
                             />
                         </div>
+
                         <div className="mb-6">
                             <label htmlFor="password" className="block text-sm font-medium mb-1">Password</label>
                             <input
@@ -6306,15 +6363,59 @@ Answer conversational questions directly in the chat. Only create documents when
                                 placeholder="Password"
                                 required
                             />
+                            {/* Password strength suggestion visible only for Sign Up mode */}
+                            {!isLoginMode && (
+                                <p className="text-xs mt-1 text-gray-500 dark:text-gray-400">
+                                    Password must be at least 6 characters long.
+                                </p>
+                            )}
                         </div>
+
                         <button
                             type="submit"
                             className={`w-full p-2 rounded-md font-semibold
                                 ${isDarkMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'} text-white transition-colors`}
-                            disabled={isAuthenticating}
+                            disabled={isAuthenticating} // Disable button while processing
                         >
-                            {isAuthenticating ? 'Logging in...' : 'Log In'}
+                            {isAuthenticating ? 'Processing...' : (isLoginMode ? 'Log In' : 'Sign Up')} {/* Dynamic button text */}
                         </button>
+
+                        {/* Toggle between Login and Sign Up forms */}
+                        <p className="text-center mt-4 text-sm">
+                            {isLoginMode ? (
+                                <>
+                                    Don't have an account?{' '}
+                                    <button
+                                        type="button" // Important: type="button" to prevent form submission
+                                        onClick={() => { 
+                                            setIsLoginMode(false); 
+                                            setAuthError(''); 
+                                            setEmail('');          // Clear email field
+                                            setPassword('');       // Clear password field
+                                        }} // Switch to Sign Up mode
+                                        className="text-blue-500 hover:underline"
+                                    >
+                                        Sign Up
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    Already have an account?{' '}
+                                    <button
+                                        type="button" // Important: type="button" to prevent form submission
+                                        onClick={() => { 
+                                            setIsLoginMode(true); 
+                                            setAuthError(''); 
+                                            setEmail('');          // Clear email field
+                                            setPassword('');       // Clear password field
+                                        }} // Switch back to Login mode
+                                        className="text-blue-500 hover:underline"
+                                    >
+                                        Log In
+                                    </button>
+                                </>
+                            )}
+                        </p>
                     </form>
                 </div>
             ) : ( // User is authenticated, render the main app content
