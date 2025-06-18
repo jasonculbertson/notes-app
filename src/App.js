@@ -1068,6 +1068,7 @@ const App = () => {
     // New states for added features
     const [searchTerm, setSearchTerm] = useState(''); // State for document search query
     const [isDarkMode, setIsDarkMode] = useState(false); // State for dark mode toggle
+    const [showNewMenu, setShowNewMenu] = useState(false); // State to control consolidated "New" menu visibility
     const [showTemplateMenu, setShowTemplateMenu] = useState(false); // State to control template menu visibility
     const [showSidebarMobile, setShowSidebarMobile] = useState(false); // Mobile: sidebar visibility
     const [showLlmMobile, setShowLlmMobile] = useState(false); // Mobile: LLM panel visibility
@@ -2151,12 +2152,14 @@ const App = () => {
     // Ref for the LLM response scroll
     const llmResponseRef = useRef(null);
     const saveTimerRef = useRef(null); // Ref to hold the autosave timer
+    const newMenuRef = useRef(null); // Ref for consolidated "New" menu for click outside detection
     const templateMenuRef = useRef(null); // Ref for template menu for click outside detection
     const resizeRef = useRef(null); // Ref for resize functionality
 
     // Refs for Editor.js
     const editorRef = useRef(null); // Reference to the Editor.js instance
     const editorElementRef = useRef(null); // Reference to the div element where Editor.js will be mounted
+    const titleInputRef = useRef(null); // Reference to the title input field
     
     // File Management Refs
     const fileInputRef = useRef(null); // Reference to the hidden file input
@@ -2672,6 +2675,8 @@ const App = () => {
             snapshot.docs.forEach(doc => {
                 const data = doc.data();
                 const linkedPages = data.linkedPages || [];
+                let content = data.content || '';
+                let needsUpdate = false;
                 
                 console.log(`Document "${data.title || doc.id}":`, {
                     id: doc.id,
@@ -2680,6 +2685,7 @@ const App = () => {
                     linkedPagesLength: linkedPages.length
                 });
                 
+                // Clean up duplicate linkedPages
                 if (linkedPages.length > 0) {
                     const uniqueLinks = [...new Set(linkedPages)];
                     
@@ -2689,18 +2695,39 @@ const App = () => {
                     // Only update if there were duplicates
                     if (linkedPages.length !== uniqueLinks.length) {
                         console.log(`  ✅ Found duplicates! Will clean up document: ${data.title || doc.id}`);
-                        const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, doc.id);
-                        cleanupPromises.push(
-                            updateDoc(docRef, {
-                                linkedPages: uniqueLinks,
-                                updatedAt: new Date()
-                            })
-                        );
+                        needsUpdate = true;
+                        linkedPages = uniqueLinks;
                     } else {
                         console.log(`  ✓ No duplicates found in document: ${data.title || doc.id}`);
                     }
                 } else {
                     console.log(`  ✓ No linked pages in document: ${data.title || doc.id}`);
+                }
+                
+                // Clean up [[text]] links from content
+                const originalContent = content;
+                content = content.replace(/\[\[([^\]]+)\]\]/g, '$1'); // Remove [[ ]] brackets, keep the text
+                
+                if (content !== originalContent) {
+                    console.log(`  ✅ Cleaned up [[text]] links in document: ${data.title || doc.id}`);
+                    needsUpdate = true;
+                }
+                
+                if (needsUpdate) {
+                    const docRef = doc(db, `artifacts/${appId}/users/${userId}/notes`, doc.id);
+                    const updateData = {
+                        updatedAt: new Date()
+                    };
+                    
+                    if (linkedPages.length !== (data.linkedPages || []).length) {
+                        updateData.linkedPages = linkedPages;
+                    }
+                    
+                    if (content !== originalContent) {
+                        updateData.content = content;
+                    }
+                    
+                    cleanupPromises.push(updateDoc(docRef, updateData));
                 }
             });
             
@@ -2768,20 +2795,16 @@ const App = () => {
         const currentDoc = documents.find(doc => doc.id === currentDocumentId);
         const linkedPageIds = currentDoc?.linkedPages || [];
         
-        console.log('Original linkedPageIds:', linkedPageIds);
-        
         // Remove duplicates from linkedPageIds
         const uniqueLinkedPageIds = [...new Set(linkedPageIds)];
         
-        console.log('Unique linkedPageIds:', uniqueLinkedPageIds);
-        
-        // Get the actual document objects for linked pages
-        const linkedDocs = documents.filter(doc => uniqueLinkedPageIds.includes(doc.id));
-        
-        console.log('LinkedDocs for display:', linkedDocs.map(d => ({ id: d.id, title: d.title })));
+        // Get the actual document objects for linked pages, excluding child documents
+        const linkedDocs = documents.filter(doc => 
+            uniqueLinkedPageIds.includes(doc.id) && doc.parentId !== currentDocumentId
+        );
         
         // Update each Links block
-        linksBlocks.forEach(block => {
+        linksBlocks.forEach((block, index) => {
             const contentDiv = block.querySelector('.links-content');
             if (!contentDiv) return;
             
@@ -2915,33 +2938,49 @@ const App = () => {
         if (currentDocumentId && documents.length > 0) {
             updateAllLinksBlocks();
             
-            // Auto-add Links block if document has linked pages but no Links block exists
+            // Auto-add Links block if document has linked pages (excluding child documents) but no Links block exists
             const currentDoc = documents.find(doc => doc.id === currentDocumentId);
-            const hasLinkedPages = currentDoc?.linkedPages && currentDoc.linkedPages.length > 0;
+            const linkedPageIds = currentDoc?.linkedPages || [];
+            const uniqueLinkedPageIds = [...new Set(linkedPageIds)];
+            const nonChildLinkedDocs = documents.filter(doc => 
+                uniqueLinkedPageIds.includes(doc.id) && doc.parentId !== currentDocumentId
+            );
+            const hasLinkedPages = nonChildLinkedDocs.length > 0;
             
             if (hasLinkedPages && editorElementRef.current) {
                 const existingLinksBlocks = editorElementRef.current.querySelectorAll('[data-links-block="true"]');
                 
-                if (existingLinksBlocks.length === 0) {
+                // Clean up duplicates if more than 1 exists
+                if (existingLinksBlocks.length > 1) {
+                    for (let i = 1; i < existingLinksBlocks.length; i++) {
+                        existingLinksBlocks[i].remove();
+                    }
+                }
+                // Add Links block if none exists
+                else if (existingLinksBlocks.length === 0) {
                     // Add Links block at the end of the document
                     setTimeout(() => {
                         if (editorElementRef.current?._richEditor?.editor) {
                             const editor = editorElementRef.current._richEditor.editor;
                             
-                            // Create the Links block at the end
-                            const linksBlockHtml = `
-                                <div class="links-block" data-links-block="true" style="margin: 8px 0; padding: 0;">
-                                    <div class="links-content" style="color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; font-size: 14px;">
-                                        Loading links...
+                            // Double-check no Links blocks were added in the meantime
+                            const recheckBlocks = editor.querySelectorAll('[data-links-block="true"]');
+                            if (recheckBlocks.length === 0) {
+                                // Create the Links block at the end
+                                const linksBlockHtml = `
+                                    <div class="links-block" data-links-block="true" style="margin: 8px 0; padding: 0;">
+                                        <div class="links-content" style="color: ${isDarkMode ? '#9ca3af' : '#6b7280'}; font-size: 14px;">
+                                            Loading links...
+                                        </div>
                                     </div>
-                                </div>
-                            `;
-                            
-                            // Insert at the end
-                            editor.innerHTML += linksBlockHtml;
-                            
-                            // Update the Links block content
-                            setTimeout(() => updateAllLinksBlocks(), 100);
+                                `;
+                                
+                                // Insert at the end
+                                editor.innerHTML += linksBlockHtml;
+                                
+                                // Update the Links block content
+                                setTimeout(() => updateAllLinksBlocks(), 100);
+                            }
                         }
                     }, 500);
                 }
@@ -4217,12 +4256,14 @@ Return only the expanded text without any additional commentary.`;
             console.error("Firestore: Database, user, or appId not ready to add document.");
             return;
         }
+        
+        console.log(`🔥 CREATING NEW DOCUMENT: "${template.title || 'Untitled'}" with parentId: ${parentId}`);
         const newDocRef = collection(db, `artifacts/${appId}/users/${userId}/notes`);
         const newDocId = crypto.randomUUID();
         const newDocData = {
             id: newDocId,
-            title: template.title,
-            content: template.content,
+            title: template.title || '', // Empty title for immediate editing
+            content: template.content || '',
             tags: [],
             parentId: parentId,
             order: Date.now(), // Use timestamp for initial ordering
@@ -4234,12 +4275,6 @@ Return only the expanded text without any additional commentary.`;
         };
         try {
             await setDoc(doc(newDocRef, newDocId), newDocData);
-            setCurrentDocumentId(newDocId);
-            setCurrentDocumentContent(newDocData.content);
-            setCurrentDocumentTitle(newDocData.title);
-            setCurrentDocumentTags(newDocData.tags);
-            setLlmResponse('');
-            setSaveStatus('All changes saved');
             
             // Expand parent node if adding a child
             if (parentId) {
@@ -4248,6 +4283,50 @@ Return only the expanded text without any additional commentary.`;
                 // Add link to parent page
                 await addChildLinkToParent(parentId, newDocId, template.title || 'Untitled');
             }
+            
+            // Navigate to the newly created document AFTER all database operations
+            console.log(`🚀 NAVIGATING TO NEWLY CREATED DOCUMENT: ${newDocId}`);
+            setCurrentDocumentId(newDocId);
+            setCurrentDocumentContent(newDocData.content);
+            setCurrentDocumentTitle(newDocData.title);
+            setCurrentDocumentTags(newDocData.tags);
+            setLlmResponse('');
+            setSaveStatus('All changes saved');
+            
+            // Focus the appropriate input after a short delay to ensure the document has loaded
+            setTimeout(() => {
+                console.log(`🎯 FOCUS LOGIC - newDocData.title: "${newDocData.title}", currentDocumentId: ${currentDocumentId}, newDocId: ${newDocId}`);
+                
+                // Only focus if we're still on the newly created document
+                if (currentDocumentId === newDocId) {
+                    if (newDocData.title === '') {
+                        // If title is empty, focus the title input for immediate editing
+                        if (titleInputRef.current) {
+                            console.log('🎯 ATTEMPTING TO FOCUS TITLE INPUT');
+                            titleInputRef.current.focus();
+                            titleInputRef.current.select(); // Select any placeholder text
+                            console.log('✨ TITLE INPUT FOCUSED FOR NEW DOCUMENT');
+                        } else {
+                            console.log('❌ TITLE INPUT REF NOT AVAILABLE');
+                        }
+                    } else {
+                        // If title exists, focus the editor content
+                        if (editorElementRef.current) {
+                            // Try to focus the rich editor's editable content
+                            if (editorElementRef.current._richEditor?.editor) {
+                                editorElementRef.current._richEditor.editor.focus();
+                            } else {
+                                // Fallback to focusing the main container
+                                editorElementRef.current.focus();
+                            }
+                            console.log('✨ EDITOR FOCUSED FOR NEW DOCUMENT');
+                        }
+                    }
+                } else {
+                    console.log(`❌ FOCUS SKIPPED - Current document changed from ${newDocId} to ${currentDocumentId}`);
+                }
+            }, 300); // Further increased delay to ensure all state updates are complete
+            
         } catch (e) {
             console.error("Error adding document: ", e);
         } finally {
@@ -4339,43 +4418,17 @@ Return only the expanded text without any additional commentary.`;
             }
 
             const parentData = parentDoc.data();
-            let parentContent = parentData.content || '';
             
-            // Create the link text
-            const linkText = `[[${childTitle}]]`;
-            
-            // Check if link already exists in the content
-            if (parentContent.includes(linkText)) {
-                console.log("Link already exists in parent document");
-                return;
-            }
-            
-            // Add the link to the parent document content (simple HTML format for rich text editor)
-            let updatedContent = '';
-            
-            if (parentContent.trim()) {
-                // Append to existing content
-                updatedContent = parentContent + `<p><a href="#" data-document-id="${childId}" class="internal-link">${linkText}</a></p>`;
-            } else {
-                // Empty document, create basic structure
-                updatedContent = `<p><a href="#" data-document-id="${childId}" class="internal-link">${linkText}</a></p>`;
-            }
-            
-            // Update the parent document
-            await updateDoc(parentDocRef, {
-                content: updatedContent,
-                updatedAt: Timestamp.now()
-            });
-            
-            // Update linkedPages array
+            // Only update linkedPages array, don't insert text links into content
             const currentLinkedPages = parentData.linkedPages || [];
             if (!currentLinkedPages.includes(childId)) {
                 await updateDoc(parentDocRef, {
-                    linkedPages: [...currentLinkedPages, childId]
+                    linkedPages: [...currentLinkedPages, childId],
+                    updatedAt: Timestamp.now()
                 });
             }
             
-            console.log(`Added link to child "${childTitle}" in parent document`);
+            console.log(`Added link to child "${childTitle}" in parent document linkedPages`);
             
             // Update Links blocks in the parent document if any exist
             if (parentId === currentDocumentId) {
@@ -4411,15 +4464,15 @@ Return only the expanded text without any additional commentary.`;
             // Find all child documents that have parents
             const childDocs = allDocs.filter(doc => doc.parentId);
             
-            // For each child, ensure the parent has a link to it
+            // For each child, ensure the parent has it in linkedPages array
             for (const childDoc of childDocs) {
                 const parentDoc = allDocs.find(doc => doc.id === childDoc.parentId);
                 if (parentDoc) {
-                    const linkText = `[[${childDoc.title || 'Untitled'}]]`;
+                    const currentLinkedPages = parentDoc.linkedPages || [];
                     
-                    // Check if parent already has this link
-                    if (!parentDoc.content || !parentDoc.content.includes(linkText)) {
-                        console.log(`Adding missing link for "${childDoc.title}" to parent "${parentDoc.title}"`);
+                    // Only update linkedPages array, don't add text links
+                    if (!currentLinkedPages.includes(childDoc.id)) {
+                        console.log(`Adding missing linkedPages entry for "${childDoc.title}" to parent "${parentDoc.title}"`);
                         await addChildLinkToParent(parentDoc.id, childDoc.id, childDoc.title || 'Untitled');
                     }
                 }
@@ -5247,6 +5300,7 @@ Answer conversational questions directly in the chat. Only create documents when
     };
 
     const handleDocumentSelect = (docId) => {
+        console.log(`📋 DOCUMENT SELECTED: ${docId} (previous: ${currentDocumentId})`);
         setCurrentDocumentId(docId);
         setLlmResponse('');
         setShowSidebarMobile(false);
@@ -5424,6 +5478,7 @@ Answer conversational questions directly in the chat. Only create documents when
                         <button
                             onClick={(e) => {
                                 e.stopPropagation();
+                                console.log(`➕ ADD CHILD BUTTON CLICKED for parent: ${node.id} (${node.title})`);
                                 onAddChild(node.id);
                             }}
                             className={`p-1 rounded-md transition-colors flex-shrink-0
@@ -5698,6 +5753,9 @@ Answer conversational questions directly in the chat. Only create documents when
 
     useEffect(() => {
         const handleClickOutside = (event) => {
+            if (newMenuRef.current && !newMenuRef.current.contains(event.target)) {
+                setShowNewMenu(false);
+            }
             if (templateMenuRef.current && !templateMenuRef.current.contains(event.target)) {
                 setShowTemplateMenu(false);
             }
@@ -5723,7 +5781,7 @@ Answer conversational questions directly in the chat. Only create documents when
         return () => {
             document.removeEventListener('mousedown', handleClickOutside);
         };
-    }, [openOverflowMenu, showPlusOverlay, aiTagSuggestions, aiTransformToolbar.visible]);
+    }, [showNewMenu, openOverflowMenu, showPlusOverlay, aiTagSuggestions, aiTransformToolbar.visible]);
 
 
 
@@ -5802,44 +5860,25 @@ Answer conversational questions directly in the chat. Only create documents when
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
 
-                {/* Workspace Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
-                    <div className="flex items-center min-w-0 flex-1">
+                {/* Workspace Header with Integrated Search */}
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+                    {/* Workspace Title */}
+                    <div className="flex items-center mb-3">
                         <div className="w-6 h-6 rounded-sm bg-gradient-to-br from-blue-500 to-purple-600 flex-shrink-0 mr-2 flex items-center justify-center">
                             <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
                                 <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
                             </svg>
                         </div>
-                        <span className={`font-medium text-sm truncate ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
+                        <span className={`font-medium text-sm ${isDarkMode ? 'text-gray-100' : 'text-gray-900'}`}>
                             My Workspace
                         </span>
                     </div>
-                    <button
-                        onClick={toggleDarkMode}
-                        className={`p-1.5 rounded-md flex-shrink-0 transition-colors duration-200
-                            ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-600'}
-                        `}
-                        title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                    >
-                        {isDarkMode ? (
-                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
-                            </svg>
-                        ) : (
-                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clipRule="evenodd" />
-                            </svg>
-                        )}
-                    </button>
-                </div>
-
-                {/* Navigation Section */}
-                <div className="px-3 py-3 space-y-1">
-                    {/* Search */}
-                    <div className={`flex items-center px-2 py-1.5 rounded-md transition-colors cursor-pointer
-                        ${isDarkMode ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-200 text-gray-700'}
+                    
+                    {/* Search Bar */}
+                    <div className={`flex items-center px-3 py-2 rounded-md transition-colors
+                        ${isDarkMode ? 'bg-gray-800 hover:bg-gray-750' : 'bg-gray-100 hover:bg-gray-50'}
                     `}>
-                        <svg className="w-4 h-4 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                         </svg>
                         <input
@@ -5854,66 +5893,106 @@ Answer conversational questions directly in the chat. Only create documents when
                     </div>
                 </div>
 
-                {/* Private Section */}
-                <div className="px-3">
-                    <div className={`flex items-center justify-between px-2 py-1 mb-2
-                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
-                    `}>
-                        <span className="text-xs font-medium uppercase tracking-wider">Private</span>
-                        <button
-                            onClick={() => setShowTemplateMenu(prev => !prev)}
-                            className={`p-1 rounded-md transition-colors
-                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
-                            `}
-                            title="Add page"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {/* Consolidated New Menu */}
+                <div className="px-4 py-3 relative">
+                    <button
+                        onClick={() => setShowNewMenu(prev => !prev)}
+                        className={`flex items-center justify-between w-full px-3 py-2 rounded-md text-sm font-medium transition-colors
+                            ${isDarkMode ? 'bg-gray-800 hover:bg-gray-700 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}
+                        `}
+                    >
+                        <div className="flex items-center">
+                            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
                             </svg>
-                        </button>
-                    </div>
+                            New
+                        </div>
+                        <svg className={`w-4 h-4 transition-transform ${showNewMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </button>
 
-                    {/* Template dropdown */}
-                    {showTemplateMenu && (
-                        <div className={`absolute left-4 right-4 z-50 rounded-md shadow-lg border mt-1
+                    {/* New Menu Dropdown */}
+                    {showNewMenu && (
+                        <div className={`absolute left-4 right-4 top-full mt-1 z-50 rounded-md shadow-lg border
                             ${isDarkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}
-                        `} ref={templateMenuRef}>
+                        `} ref={newMenuRef}>
                             <div className="p-2">
+                                {/* Page Templates */}
+                                <div className={`px-2 py-1 text-xs font-medium uppercase tracking-wider mb-1
+                                    ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
+                                `}>
+                                    Pages
+                                </div>
                                 {templates.map(template => (
                                     <button
                                         key={template.name}
-                                        onClick={() => handleAddDocument(template)}
-                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-sm text-left transition-colors
+                                        onClick={() => {
+                                            handleAddDocument(template);
+                                            setShowNewMenu(false);
+                                        }}
+                                        className={`flex items-center w-full px-2 py-2 rounded-md text-sm text-left transition-colors
                                             ${isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}
                                         `}
                                     >
-                                        <svg className="w-4 h-4 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <svg className="w-4 h-4 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                                         </svg>
                                         {template.name}
                                     </button>
                                 ))}
+                                
+                                {/* Divider */}
+                                <div className={`border-t my-2 ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}></div>
+                                
+                                {/* File Upload */}
+                                <div className={`px-2 py-1 text-xs font-medium uppercase tracking-wider mb-1
+                                    ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
+                                `}>
+                                    Import
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        triggerFileUpload();
+                                        setShowNewMenu(false);
+                                    }}
+                                    className={`flex items-center w-full px-2 py-2 rounded-md text-sm text-left transition-colors
+                                        ${isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}
+                                    `}
+                                    disabled={isUploadingFile}
+                                >
+                                    {isUploadingFile ? (
+                                        <div className="animate-spin rounded-full h-4 w-4 border-t border-current mr-3"></div>
+                                    ) : (
+                                        <svg className="w-4 h-4 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                                        </svg>
+                                    )}
+                                    Upload File
+                                </button>
+                                
+                                {/* Google Link */}
+                                <button
+                                    onClick={() => {
+                                        setShowAddGoogleLinkModal(true);
+                                        setShowNewMenu(false);
+                                    }}
+                                    className={`flex items-center w-full px-2 py-2 rounded-md text-sm text-left transition-colors
+                                        ${isDarkMode ? 'text-gray-300 hover:bg-gray-700' : 'text-gray-700 hover:bg-gray-100'}
+                                    `}
+                                >
+                                    <svg className="w-4 h-4 mr-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                                    </svg>
+                                    Add Google Link
+                                </button>
                             </div>
                         </div>
                     )}
                 </div>
 
-                {/* Logout Section */}
-                <div className={`mt-auto p-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-                    <div className={`text-xs mb-2 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                        Logged in as: {auth?.currentUser?.email || 'N/A'}
-                    </div>
-                    <button
-                        onClick={handleLogout}
-                        className={`w-full px-3 py-2 rounded-md text-sm font-medium
-                            ${isDarkMode ? 'bg-red-600 hover:bg-red-700' : 'bg-red-500 hover:bg-red-600'} text-white transition-colors`}
-                    >
-                        Log Out
-                    </button>
-                </div>
-
                 {/* Documents List */}
-                <div className="flex-grow overflow-y-auto px-1">
+                <div className="flex-grow overflow-y-auto px-4 py-2">
                     {/* Filter by search but show hierarchical tree */}
                     {filteredDocuments.length === 0 && documents.length === 0 && (
                         <div className={`text-sm px-2 py-3 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
@@ -5945,196 +6024,106 @@ Answer conversational questions directly in the chat. Only create documents when
                 </div>
 
                 {/* File Management Sections */}
-                {/* Files Section */}
-                <div className="px-3 border-t border-gray-200 dark:border-gray-800 pt-3">
-                    <div className={`flex items-center justify-between px-2 py-1 mb-2
-                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
-                    `}>
+                {uploadedFiles.length > 0 && (
+                    <div className="px-4 border-t border-gray-200 dark:border-gray-800 pt-3">
                         <button
                             onClick={() => setShowFilesSection(prev => !prev)}
-                            className="flex items-center text-xs font-medium uppercase tracking-wider"
+                            className={`flex items-center w-full px-2 py-1 mb-2 text-xs font-medium uppercase tracking-wider
+                                ${isDarkMode ? 'text-gray-500 hover:text-gray-400' : 'text-gray-500 hover:text-gray-600'}
+                            `}
                         >
-                            <svg className={`w-3 h-3 mr-1 transition-transform ${showFilesSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className={`w-3 h-3 mr-2 transition-transform ${showFilesSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>
                             </svg>
                             Files ({uploadedFiles.length})
                         </button>
-                        <button
-                            onClick={triggerFileUpload}
-                            className={`p-1 rounded-md transition-colors
-                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
-                            `}
-                            title="Upload file"
-                            disabled={isUploadingFile}
-                        >
-                            {isUploadingFile ? (
-                                <div className="animate-spin rounded-full h-4 w-4 border-t border-current"></div>
-                            ) : (
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                                </svg>
-                            )}
-                        </button>
-                    </div>
 
-                    {/* Upload Progress */}
-                    {(fileUploadProgress || fileContentProcessingProgress) && (
-                        <div className={`px-2 py-1 mb-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                            {fileUploadProgress || fileContentProcessingProgress}
-                        </div>
-                    )}
+                        {/* Upload Progress */}
+                        {(fileUploadProgress || fileContentProcessingProgress) && (
+                            <div className={`px-2 py-1 mb-2 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                {fileUploadProgress || fileContentProcessingProgress}
+                            </div>
+                        )}
 
-                    {/* Files List */}
-                    {showFilesSection && (
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                            {uploadedFiles.length === 0 ? (
-                                <div className={`text-xs px-2 py-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                                    No files uploaded
-                                </div>
-                            ) : (
-                                uploadedFiles.map(file => (
+                        {/* Files List */}
+                        {showFilesSection && (
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                                {uploadedFiles.map(file => (
                                     <div key={file.id} className={`flex items-center px-2 py-1.5 rounded-md transition-colors group
                                         ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}
                                     `}>
-                                        <span className="text-lg mr-2">{getFileIcon(file.fileType)}</span>
+                                        <span className="text-sm mr-2">{getFileIcon(file.fileType)}</span>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => window.open(file.downloadURL, '_blank')}
-                                                    className={`text-sm truncate flex-1 text-left hover:underline
-                                                        ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
-                                                    `}
-                                                    title={file.fileName}
-                                                >
-                                                    {file.fileName}
-                                                </button>
-                                                {/* Phase 2: AI Analysis Indicator */}
-                                                {file.contentExtracted && (
-                                                    <span 
-                                                        className="text-green-500 text-xs" 
-                                                        title="Content analyzed for AI assistant"
-                                                    >
-                                                        🧠
-                                                    </span>
-                                                )}
-                                            </div>
+                                            <button
+                                                onClick={() => window.open(file.downloadURL, '_blank')}
+                                                className={`text-sm truncate w-full text-left hover:underline
+                                                    ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
+                                                `}
+                                                title={file.fileName}
+                                            >
+                                                {file.fileName}
+                                            </button>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                                                 {formatFileSize(file.fileSize)}
-                                                {file.processingStatus === 'pending' && (
-                                                    <span className="ml-2 text-yellow-600">• Processing...</span>
-                                                )}
-                                                {file.processingStatus === 'completed' && file.contentExtracted && (
+                                                {file.contentExtracted && (
                                                     <span className="ml-2 text-green-600">• AI Ready</span>
-                                                )}
-                                                {file.processingStatus === 'failed' && (
-                                                    <span className="ml-2 text-red-600">• Processing Failed</span>
                                                 )}
                                             </div>
                                         </div>
-                                        <div className="flex items-center gap-1">
-                                            {/* Phase 2: Re-analyze button for files without content */}
-                                            {!file.contentExtracted && (
-                                                <button
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleReprocessFile(file);
-                                                    }}
-                                                    className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
-                                                        ${isDarkMode ? 'hover:bg-blue-700 text-blue-400' : 'hover:bg-blue-200 text-blue-600'}
-                                                    `}
-                                                    title="Analyze for AI assistant"
-                                                    disabled={isProcessingFileContent}
-                                                >
-                                                    🧠
-                                                </button>
-                                            )}
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleDeleteFile(file.id);
-                                                }}
-                                                className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
-                                                    ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
-                                                `}
-                                                title="Delete file"
-                                            >
-                                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                                                </svg>
-                                            </button>
-                                        </div>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDeleteFile(file.id);
+                                            }}
+                                            className={`opacity-0 group-hover:opacity-100 p-1 rounded transition-all
+                                                ${isDarkMode ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
+                                            `}
+                                            title="Delete file"
+                                        >
+                                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                            </svg>
+                                        </button>
                                     </div>
-                                ))
-                            )}
-                        </div>
-                    )}
-                </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Google Links Section */}
-                <div className="px-3 border-t border-gray-200 dark:border-gray-800 pt-3">
-                    <div className={`flex items-center justify-between px-2 py-1 mb-2
-                        ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}
-                    `}>
+                {googleLinks.length > 0 && (
+                    <div className="px-4 border-t border-gray-200 dark:border-gray-800 pt-3">
                         <button
                             onClick={() => setShowGoogleLinksSection(prev => !prev)}
-                            className="flex items-center text-xs font-medium uppercase tracking-wider"
+                            className={`flex items-center w-full px-2 py-1 mb-2 text-xs font-medium uppercase tracking-wider
+                                ${isDarkMode ? 'text-gray-500 hover:text-gray-400' : 'text-gray-500 hover:text-gray-600'}
+                            `}
                         >
-                            <svg className={`w-3 h-3 mr-1 transition-transform ${showGoogleLinksSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className={`w-3 h-3 mr-2 transition-transform ${showGoogleLinksSection ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"/>
                             </svg>
                             Google Links ({googleLinks.length})
                         </button>
-                        <button
-                            onClick={() => setShowAddGoogleLinkModal(true)}
-                            className={`p-1 rounded-md transition-colors
-                                ${isDarkMode ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}
-                            `}
-                            title="Add Google link"
-                        >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/>
-                            </svg>
-                        </button>
-                    </div>
 
-                    {/* Google Links List */}
-                    {showGoogleLinksSection && (
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                            {googleLinks.length === 0 ? (
-                                <div className={`text-xs px-2 py-1 ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                                    No Google links added
-                                </div>
-                            ) : (
-                                <>
-                                    <div className={`text-xs px-2 py-1 mb-2 ${isDarkMode ? 'text-blue-400 bg-blue-900/20' : 'text-blue-600 bg-blue-50'} rounded`}>
-                                        💡 Tip: Public Google Docs content auto-extracts for AI. Private docs need copy/paste.
-                                    </div>
-                                    {googleLinks.map(link => (
+                        {/* Google Links List */}
+                        {showGoogleLinksSection && (
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                                {googleLinks.map(link => (
                                     <div key={link.id} className={`flex items-center px-2 py-1.5 rounded-md transition-colors group
                                         ${isDarkMode ? 'hover:bg-gray-800' : 'hover:bg-gray-100'}
                                     `}>
-                                        <span className="text-lg mr-2">{getLinkIcon(link.linkType)}</span>
+                                        <span className="text-sm mr-2">{getLinkIcon(link.linkType)}</span>
                                         <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                                <button
-                                                    onClick={() => window.open(link.url, '_blank')}
-                                                    className={`text-sm truncate flex-1 text-left hover:underline
-                                                        ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
-                                                    `}
-                                                    title={link.title}
-                                                >
-                                                    {link.title}
-                                                </button>
-                                                {/* Content extraction indicator */}
-                                                {link.contentExtracted && (
-                                                    <span 
-                                                        className="text-green-500 text-xs" 
-                                                        title="Content extracted for AI assistant"
-                                                    >
-                                                        🧠
-                                                    </span>
-                                                )}
-                                            </div>
+                                            <button
+                                                onClick={() => window.open(link.url, '_blank')}
+                                                className={`text-sm truncate w-full text-left hover:underline
+                                                    ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}
+                                                `}
+                                                title={link.title}
+                                            >
+                                                {link.title}
+                                            </button>
                                             <div className={`text-xs ${isDarkMode ? 'text-gray-500' : 'text-gray-500'}`}>
                                                 {link.linkType === 'google_doc' ? 'Google Doc' : 'Google Sheet'}
                                                 {link.contentExtracted && (
@@ -6157,11 +6146,56 @@ Answer conversational questions directly in the chat. Only create documents when
                                             </svg>
                                         </button>
                                     </div>
-                                    ))}
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Footer with User Info and Dark Mode Toggle */}
+                <div className={`mt-auto p-4 border-t ${isDarkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                    {/* Dark Mode Toggle */}
+                    <div className="flex items-center justify-between mb-3">
+                        <span className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            Theme
+                        </span>
+                        <button
+                            onClick={toggleDarkMode}
+                            className={`flex items-center px-3 py-1.5 rounded-md text-sm transition-colors
+                                ${isDarkMode ? 'bg-gray-800 hover:bg-gray-700 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}
+                            `}
+                        >
+                            {isDarkMode ? (
+                                <>
+                                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+                                    </svg>
+                                    Dark
+                                </>
+                            ) : (
+                                <>
+                                    <svg className="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clipRule="evenodd" />
+                                    </svg>
+                                    Light
                                 </>
                             )}
-                        </div>
-                    )}
+                        </button>
+                    </div>
+                    
+                    {/* User Info */}
+                    <div className={`text-xs mb-3 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                        {auth?.currentUser?.email || 'N/A'}
+                    </div>
+                    
+                    {/* Logout Button */}
+                    <button
+                        onClick={handleLogout}
+                        className={`w-full px-3 py-2 rounded-md text-sm font-medium transition-colors
+                            ${isDarkMode ? 'bg-red-600 hover:bg-red-700' : 'bg-red-500 hover:bg-red-600'} text-white`}
+                    >
+                        Log Out
+                    </button>
                 </div>
             </div>
 
@@ -6312,6 +6346,7 @@ Answer conversational questions directly in the chat. Only create documents when
                                 
                                 <textarea
                                     ref={(el) => {
+                                        titleInputRef.current = el; // Store reference for focusing
                                         if (el) {
                                             // Auto-resize on mount and content change
                                             const resize = () => {
@@ -6568,19 +6603,8 @@ Answer conversational questions directly in the chat. Only create documents when
                                 )}
                             </div>
 
-                            {/* Temporary Cleanup Button for Debugging */}
-                            <button
-                                onClick={() => {
-                                    console.log('Manual cleanup button clicked');
-                                    console.log('Current documents:', documents.map(d => ({ id: d.id, title: d.title, linkedPages: d.linkedPages })));
-                                    cleanupDuplicateLinks();
-                                }}
-                                className={`mb-2 px-3 py-1 text-xs rounded-md transition-colors
-                                    ${isDarkMode ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}
-                                `}
-                            >
-                                🧹 Clean Duplicate Links (Debug)
-                            </button>
+
+
                         </>
                     )}
                     {/* Editor.js Integration with Fallback */}
