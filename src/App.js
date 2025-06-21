@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage } from './firebase';
 
@@ -1885,8 +1886,13 @@ const App = () => {
     // Phase 5: UI Cleanup - New AI Tag Suggestions State
     const [aiTagSuggestions, setAiTagSuggestions] = useState([]); // Stores ['tag1', 'tag2', ...]
 
+    // --- AI Insights States ---
+    const [proactiveInsights, setProactiveInsights] = useState([]); // Stores the insights fetched from Firestore
+    const [findingInsights, setFindingInsights] = useState(false); // Loading state for the "Find New Insights" button
+
     // Refs
     const tagInputContainerRef = useRef(null); // To detect clicks outside for tag suggestions
+    const functionsInstance = useRef(null); // Firebase Functions instance
 
     // Phase 5: Transient behavior for AI tag suggestions
     useEffect(() => {
@@ -3062,10 +3068,12 @@ const App = () => {
             const firestore = getFirestore(app);
             const firebaseAuth = getAuth(app);
             const firebaseStorage = getStorage(app);
+            const firebaseFunctions = getFunctions(app);
 
             setDb(firestore);
             setAuth(firebaseAuth);
             setStorage(firebaseStorage);
+            functionsInstance.current = firebaseFunctions;
             console.log('Firebase initialized successfully');
 
             const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
@@ -3881,6 +3889,44 @@ const App = () => {
         };
     }, [currentDocumentContent, currentDocumentTitle, currentDocumentTags, currentDocumentId, db, userId, isAuthReady, appId]);
 
+    // --- Fetch Proactive Insights from Firestore ---
+    useEffect(() => {
+        // Only fetch if Firestore DB and userId are ready
+        if (!db || !userId || !appId) {
+            setProactiveInsights([]); // Clear insights if not logged in or DB not ready
+            return;
+        }
+
+        // Reference to the user's private ai_insights collection
+        const insightsCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/ai_insights`);
+
+        // Query for insights that are still 'pending' (not yet dismissed or accepted)
+        // Order by creation time to show newer insights first
+        const insightsQuery = query(
+            insightsCollectionRef,
+            where("status", "==", "pending"),
+            orderBy("createdAt", "desc")
+        );
+
+        // Set up a real-time listener
+        const unsubscribe = onSnapshot(insightsQuery, (snapshot) => {
+            const fetchedInsights = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data(),
+                // Ensure timestamp is converted to Date object for easier handling if needed
+                createdAt: doc.data().createdAt ? doc.data().createdAt.toDate() : null
+            }));
+            setProactiveInsights(fetchedInsights);
+        }, (error) => {
+            console.error("Error fetching AI insights:", error);
+            // Display an error message to the user if insights can't be loaded
+            setLlmResponse("Error loading AI insights. Please try refreshing.");
+        });
+
+        // Cleanup the listener when the component unmounts or dependencies change
+        return () => unsubscribe();
+    }, [db, userId, appId]); // Dependencies: Re-run when db or userId changes
+
     // Auto-scroll to bottom of AI chat when new messages appear
     useEffect(() => {
         if (llmResponseRef.current) {
@@ -4329,6 +4375,57 @@ Return only the expanded text without any additional commentary.`;
         } catch (error) {
             console.error('Error replacing selection:', error);
             return false;
+        }
+    };
+
+    // --- Handler for "Find New Insights" Button ---
+    const handleFindInsights = async () => {
+        // Ensure user is logged in and Firebase Functions are initialized
+        if (!userId || !functionsInstance.current || !db) {
+            setLlmResponse("Please log in to use AI features.");
+            return;
+        }
+
+        setFindingInsights(true); // Activate loading state for the button
+        setLlmResponse("AI is searching for connections across your knowledge base..."); // Provide user feedback
+
+        try {
+            // Get the callable Cloud Function reference
+            const callableFindConnections = httpsCallable(functionsInstance.current, 'findConnectionsAndGenerateInsights');
+
+            // Call the Cloud Function, passing current userId and appId
+            const result = await callableFindConnections({
+                userId: userId,
+                appId: appId
+            });
+
+            // Display the message returned by the Cloud Function
+            setLlmResponse(result.data.message || "Insights search initiated successfully.");
+
+        } catch (error) {
+            console.error("Error calling findConnectionsAndGenerateInsights function:", error);
+            // Display a more specific error if available from the Cloud Function
+            const errorMessage = error.details?.message || error.message || 'An unknown error occurred.';
+            setLlmResponse(`Failed to find insights: ${errorMessage}`);
+        } finally {
+            setFindingInsights(false); // Deactivate loading state
+        }
+    };
+
+    // --- Handler for Dismissing an Insight ---
+    const handleDismissInsight = async (insightId) => {
+        if (!db || !userId) return; // Ensure DB and user are ready
+
+        // Reference to the specific insight document
+        const insightDocRef = doc(db, `artifacts/${appId}/users/${userId}/ai_insights`, insightId);
+
+        try {
+            // Update the insight's status to 'dismissed'
+            await updateDoc(insightDocRef, { status: 'dismissed', dismissedAt: serverTimestamp() });
+            setSaveStatus("Insight dismissed."); // Provide feedback
+        } catch (error) {
+            console.error("Error dismissing insight:", error);
+            setSaveStatus("Failed to dismiss insight."); // Provide error feedback
         }
     };
 
@@ -7761,6 +7858,90 @@ Answer conversational questions directly in the chat. Only create documents when
                         <p className={`text-xs mt-2 opacity-75 ${isDarkMode ? 'text-gray-400' : 'text-blue-600'}`}>
                             Click any term to search for more information online
                         </p>
+                    </div>
+                )}
+
+                {/* "Find New Insights" Button */}
+                <button
+                    onClick={handleFindInsights}
+                    className={`px-3 py-2 rounded-md text-sm font-medium w-full mt-4
+                        ${findingInsights ? 'bg-gray-400 cursor-not-allowed' : (isDarkMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-purple-500 hover:bg-purple-600')} text-white`}
+                    disabled={findingInsights || !userId || !db} // Disable button if loading or not authenticated/DB not ready
+                >
+                    {findingInsights ? 'Finding Insights...' : 'Find New Insights'}
+                </button>
+
+                {/* Display Proactive AI Insights */}
+                {proactiveInsights.length > 0 && (
+                    <div className={`mt-6 p-4 rounded-md shadow-inner
+                        ${isDarkMode ? 'bg-gray-800' : 'bg-blue-50'} text-gray-800 dark:text-gray-200`}>
+                        <h3 className="font-semibold text-lg mb-3 flex items-center">
+                            {/* Icon for Insights (e.g., a lightbulb or sparkle) */}
+                            <svg className="w-5 h-5 mr-2 text-blue-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2h2a1 1 0 000-2H9zm1-7a1 1 0 00-1 1v1a1 1 0 102 0V3a1 1 0 00-1-1zM5.05 4.95a1 1 0 00-1.414 1.414l.707.707a1 1 0 101.414-1.414l-.707-.707zm-.707 9.9l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zM9 16a1 1 0 100-2h2a1 1 0 100 2H9zm6.05-2.05a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zm-2.293-2.293a1 1 0 00-1.414 0l-4 4a1 1 0 000 1.414l4 4a1 1 0 001.414 0l4-4a1 1 0 000-1.414l-4-4z" clipRule="evenodd"></path></svg>
+                            New AI Insights:
+                        </h3>
+                        {/* Map through each insight to display it */}
+                        {proactiveInsights.map(insight => (
+                            <div key={insight.id} className={`mb-3 p-3 rounded-md shadow-sm
+                                ${isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-white text-gray-800'} border border-transparent`}>
+                                <h4 className="font-medium text-md">{insight.title}</h4>
+                                <p className="text-sm mt-1 mb-2 opacity-90">{insight.description}</p>
+
+                                {/* Display Related Documents/Files */}
+                                {insight.relatedDocumentIds && insight.relatedDocumentIds.length > 0 && (
+                                    <div className="text-xs mt-2 flex flex-wrap gap-1">
+                                        <span className="font-semibold text-gray-500 dark:text-gray-400">Related:</span>
+                                        {insight.relatedDocumentIds.map(docId => {
+                                            // Try to find the document in 'documents' (notes)
+                                            const relatedNote = documents.find(d => d.id === docId);
+                                            // Or in 'uploadedFiles'
+                                            const relatedFile = uploadedFiles.find(f => f.id === docId);
+
+                                            if (relatedNote) {
+                                                return (
+                                                    <button
+                                                        key={docId}
+                                                        onClick={() => handleDocumentSelect(docId)} // Selects the note in the editor
+                                                        className={`px-2 py-1 rounded-full text-xs
+                                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-100 hover:bg-gray-200'} text-gray-800 dark:text-gray-200`}
+                                                        title={`View Note: ${relatedNote.title || 'Untitled'}`}
+                                                    >
+                                                        {relatedNote.title || 'Untitled Note'}
+                                                    </button>
+                                                );
+                                            } else if (relatedFile) {
+                                                return (
+                                                    <a
+                                                        key={docId}
+                                                        href={relatedFile.downloadURL} // Direct link to open file in new tab
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        className={`px-2 py-1 rounded-full text-xs underline
+                                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-100 hover:bg-gray-200'} text-gray-800 dark:text-gray-200`}
+                                                        title={`Open File: ${relatedFile.fileName}`}
+                                                    >
+                                                        {relatedFile.fileName}
+                                                    </a>
+                                                );
+                                            }
+                                            return null; // If document not found
+                                        })}
+                                    </div>
+                                )}
+
+                                {/* Action buttons for the insight */}
+                                <div className="flex justify-end gap-2 mt-3">
+                                    {/* For MVP, only a Dismiss button */}
+                                    <button
+                                        onClick={() => handleDismissInsight(insight.id)}
+                                        className={`px-3 py-1 rounded-md text-sm
+                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-200 hover:bg-gray-300'} text-gray-800 dark:text-gray-200 transition-colors`}
+                                    >
+                                        Dismiss
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
 
