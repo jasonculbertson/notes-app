@@ -7993,6 +7993,178 @@ Answer conversational questions directly in the chat. Only create documents when
                         {llmLoading ? 'Thinking...' : 'Send'}
                     </button>
 
+                    {/* Quick Actions Modal */}
+                    {showQuickActionsModal && (
+                        <div className={`absolute left-0 bottom-full mb-2 w-72 rounded-lg shadow-xl border z-50
+                            ${isDarkMode ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-200 text-gray-800'}`}
+                            ref={quickActionsModalRef}>
+
+                            <div className="p-3">
+                                <h2 className="text-sm font-semibold mb-3">Quick Actions</h2>
+
+                                {/* AI & Insights Section */}
+                                <div className={`mb-3 pb-3 ${isDarkMode ? 'border-b border-gray-700' : 'border-b border-gray-200'}`}>
+                                    <h3 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">AI & Insights</h3>
+                                    
+                                    {/* Suggest Title & Icon */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            // Trigger AI to suggest title & icon for current document
+                                            askLlm('Suggest 4 concise titles and relevant emoji or placeholder image icons for the current document. Return as a JSON array of objects with "title" and "icon" properties.');
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-blue-500">
+                                            {/* Star Icon */}
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.538 1.118l-2.8-2.034a1 1 0 00-1.176 0l-2.8 2.034c-.783.57-1.838-.197-1.538-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.929 8.72c-.783-.57-.381-1.81.588-1.81h3.462a1 1 0 00.95-.69l1.07-3.292z"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Suggest Title & Icon</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">AI suggestions for this page</div>
+                                        </div>
+                                    </button>
+
+                                    {/* Suggest Tags */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            // Trigger AI to suggest tags for current document
+                                            askLlm('Suggest up to 5 concise and relevant tags (keywords) for the current document based on its content. Return as a JSON array of strings, e.g., ["tag1", "tag2"].');
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-green-500">
+                                            {/* Tag Icon */}
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7a1 1 0 010-1.414l7-7a1 1 0 011.414 0l7 7zM5 8V3h3l7 7-7 7H5V8z" clipRule="evenodd"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Suggest Tags</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">AI suggestions for this page</div>
+                                        </div>
+                                    </button>
+
+                                    {/* Summarize Page */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            // This will use handleAiTransform but for the entire document content
+                                            if (currentDocumentContent) {
+                                               // Set the selectedText state temporarily to the entire currentDocumentContent
+                                               // and then call handleAiTransform. The modal will pop up.
+                                               setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
+                                               handleAiTransform('summarize');
+                                            } else {
+                                                setLlmResponse("No content on the page to summarize.");
+                                            }
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-yellow-500">
+                                            {/* Document/Summarize Icon */}
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 10a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Summarize Page</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Condense current content</div>
+                                        </div>
+                                    </button>
+                                    {/* Rewrite Page */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            if (currentDocumentContent) {
+                                               setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
+                                               handleAiTransform('rewrite');
+                                            } else {
+                                                setLlmResponse("No content on the page to rewrite.");
+                                            }
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-red-500">
+                                            {/* Rewrite Icon (e.g., pen or quill) */}
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Rewrite Page</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Rephrase current content</div>
+                                        </div>
+                                    </button>
+                                     {/* Expand Page */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            if (currentDocumentContent) {
+                                               setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
+                                               handleAiTransform('expand');
+                                            } else {
+                                                setLlmResponse("No content on the page to expand.");
+                                            }
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-purple-500">
+                                            {/* Expand Icon (e.g., arrows pointing out) */}
+                                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m0 0l-5 5M4 16v4m0 0h4m0 0l5-5m11 1v4m0 0h-4m0 0l-5-5"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Expand Page</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Develop current content</div>
+                                        </div>
+                                    </button>
+                                </div>
+
+                                {/* Insert Content Section */}
+                                <div className="mb-3">
+                                    <h3 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">Insert Content</h3>
+                                    
+                                    {/* Upload Files */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            fileInputRef.current.click(); // Trigger the hidden file input
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-indigo-500">
+                                            {/* Upload Icon */}
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd"></path></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Upload Files</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Documents, images, and more</div>
+                                        </div>
+                                    </button>
+
+                                    {/* Add from Google Drive */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            setShowAddGoogleLinkModal(true);
+                                        }}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200
+                                            ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
+                                    >
+                                        <span className="mr-2 text-red-600">
+                                            {/* Google Drive Icon (or generic cloud) */}
+                                            <svg className="w-4 h-4" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M41.7 18.5H24.3l-5.6-9.7H41.7C42.8 8.8 43 9.4 43 10.5V18.5Z" fill="#2196F3"/><path d="M6.3 18.5L23.7 9.7L18.1 0L0.7 8.8C-0.3 9.4-0.1 10.5 0.7 11.6V18.5Z" fill="#FFC107"/><path d="M41.7 29.5V21.5H24.3l5.6 9.7H41.7C42.8 30.2 43 29.6 43 28.5V29.5Z" fill="#4CAF50"/><path d="M0.7 29.5V21.5H18.1l-5.6 9.7H0.7C-0.3 30.2-0.1 29.6 0.7 28.5V29.5Z" fill="#F44336"/><path d="M37.7 24L30.2 30.2L24 24L30.2 17.8L37.7 24Z" fill="#FFF"/><path d="M41.7 18.5V21.5H30.2L37.7 24L30.2 26.5H41.7V29.5H30.2L37.7 24L41.7 18.5Z" fill="#1976D2"/><path d="M6.3 18.5L18.1 21.5L12 24L18.1 26.5L6.3 29.5H0.7L6.3 18.5Z" fill="#FF8F00"/></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">Add from Google Drive</div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Import from your Google Drive</div>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                 </div>
 
@@ -8351,178 +8523,6 @@ Answer conversational questions directly in the chat. Only create documents when
                                 className="px-4 py-2 rounded-md text-sm font-medium transition-colors bg-green-600 hover:bg-green-700 text-white"
                             >
                                 ✅ Approve & Execute
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Quick Actions Modal */}
-            {showQuickActionsModal && (
-                <div className={`fixed inset-0 z-50 flex items-end md:items-center justify-center p-4`}>
-                    <div ref={quickActionsModalRef} className={`w-full max-w-sm rounded-lg shadow-xl p-4 relative transform translate-y-0 md:translate-y-0 mb-4 md:mb-0
-                        ${isDarkMode ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-800'}`}>
-
-                        <h2 className="text-xl font-bold mb-4">Quick Actions</h2>
-
-                        {/* AI & Insights Section */}
-                        <div className={`mb-4 pb-4 ${isDarkMode ? 'border-b border-gray-700' : 'border-b border-gray-200'}`}>
-                            <h3 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">AI & Insights</h3>
-                            
-                            {/* Suggest Title & Icon */}
-                            <button
-                                onClick={() => {
-                                    setShowQuickActionsModal(false);
-                                    // Trigger AI to suggest title & icon for current document
-                                    askLlm('Suggest 4 concise titles and relevant emoji or placeholder image icons for the current document. Return as a JSON array of objects with "title" and "icon" properties.');
-                                }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200 mb-1
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-blue-500">
-                                    {/* Star Icon */}
-                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.538 1.118l-2.8-2.034a1 1 0 00-1.176 0l-2.8 2.034c-.783.57-1.838-.197-1.538-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.929 8.72c-.783-.57-.381-1.81.588-1.81h3.462a1 1 0 00.95-.69l1.07-3.292z"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Suggest Title & Icon</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">AI suggestions for this page</div>
-                                </div>
-                            </button>
-
-                            {/* Suggest Tags */}
-                            <button
-                                onClick={() => {
-                                    setShowQuickActionsModal(false);
-                                    // Trigger AI to suggest tags for current document
-                                    askLlm('Suggest up to 5 concise and relevant tags (keywords) for the current document based on its content. Return as a JSON array of strings, e.g., ["tag1", "tag2"].');
-                                }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200 mb-1
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-green-500">
-                                    {/* Tag Icon */}
-                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M17.707 9.293a1 1 0 010 1.414l-7 7a1 1 0 01-1.414 0l-7-7a1 1 0 010-1.414l7-7a1 1 0 011.414 0l7 7zM5 8V3h3l7 7-7 7H5V8z" clipRule="evenodd"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Suggest Tags</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">AI suggestions for this page</div>
-                                </div>
-                            </button>
-
-                            {/* Summarize Page */}
-                            <button
-                                onClick={() => {
-                                    setShowQuickActionsModal(false);
-                                    // This will use handleAiTransform but for the entire document content
-                                    if (currentDocumentContent) {
-                                       // Set the selectedText state temporarily to the entire currentDocumentContent
-                                       // and then call handleAiTransform. The modal will pop up.
-                                       setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
-                                       handleAiTransform('summarize');
-                                    } else {
-                                        setLlmResponse("No content on the page to summarize.");
-                                    }
-                                }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200 mb-1
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-yellow-500">
-                                    {/* Document/Summarize Icon */}
-                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 10a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Summarize Page</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">Condense current content</div>
-                                </div>
-                            </button>
-                                                         {/* Rewrite Page */}
-                             <button
-                                 onClick={() => {
-                                     setShowQuickActionsModal(false);
-                                     if (currentDocumentContent) {
-                                        setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
-                                        handleAiTransform('rewrite');
-                                     } else {
-                                         setLlmResponse("No content on the page to rewrite.");
-                                     }
-                                 }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200 mb-1
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-red-500">
-                                    {/* Rewrite Icon (e.g., pen or quill) */}
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Rewrite Page</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">Rephrase current content</div>
-                                </div>
-                            </button>
-                                                           {/* Expand Page */}
-                             <button
-                                 onClick={() => {
-                                     setShowQuickActionsModal(false);
-                                     if (currentDocumentContent) {
-                                        setAiTransformToolbar(prev => ({ ...prev, selectedText: currentDocumentContent }));
-                                        handleAiTransform('expand');
-                                     } else {
-                                         setLlmResponse("No content on the page to expand.");
-                                     }
-                                 }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-purple-500">
-                                    {/* Expand Icon (e.g., arrows pointing out) */}
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m0 0l-5 5M4 16v4m0 0h4m0 0l5-5m11 1v4m0 0h-4m0 0l-5-5"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Expand Page</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">Develop current content</div>
-                                </div>
-                            </button>
-                        </div>
-
-                        {/* Insert Content Section */}
-                        <div className={`mb-4 pb-4 ${isDarkMode ? 'border-b border-gray-700' : 'border-b border-gray-200'}`}>
-                            <h3 className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 mb-2">Insert Content</h3>
-                            
-                            {/* Upload Files */}
-                            <button
-                                onClick={() => {
-                                    setShowQuickActionsModal(false);
-                                    fileInputRef.current.click(); // Trigger the hidden file input
-                                }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200 mb-1
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-indigo-500">
-                                    {/* Upload Icon */}
-                                    <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd"></path></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Upload Files</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">Documents, images, and more</div>
-                                </div>
-                            </button>
-
-                            {/* Add from Google Drive */}
-                            <button
-                                onClick={() => {
-                                    setShowQuickActionsModal(false);
-                                    setShowAddGoogleLinkModal(true);
-                                }}
-                                className={`flex items-center w-full px-3 py-2 rounded-md text-left transition-colors duration-200
-                                    ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
-                            >
-                                <span className="mr-3 text-red-600">
-                                    {/* Google Drive Icon (or generic cloud) */}
-                                    <svg className="w-5 h-5" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M41.7 18.5H24.3l-5.6-9.7H41.7C42.8 8.8 43 9.4 43 10.5V18.5Z" fill="#2196F3"/><path d="M6.3 18.5L23.7 9.7L18.1 0L0.7 8.8C-0.3 9.4-0.1 10.5 0.7 11.6V18.5Z" fill="#FFC107"/><path d="M41.7 29.5V21.5H24.3l5.6 9.7H41.7C42.8 30.2 43 29.6 43 28.5V29.5Z" fill="#4CAF50"/><path d="M0.7 29.5V21.5H18.1l-5.6 9.7H0.7C-0.3 30.2-0.1 29.6 0.7 28.5V29.5Z" fill="#F44336"/><path d="M37.7 24L30.2 30.2L24 24L30.2 17.8L37.7 24Z" fill="#FFF"/><path d="M41.7 18.5V21.5H30.2L37.7 24L30.2 26.5H41.7V29.5H30.2L37.7 24L41.7 18.5Z" fill="#1976D2"/><path d="M6.3 18.5L18.1 21.5L12 24L18.1 26.5L6.3 29.5H0.7L6.3 18.5Z" fill="#FF8F00"/></svg>
-                                </span>
-                                <div>
-                                    <div className="font-medium">Add from Google Drive</div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400">Import from your Google Drive</div>
-                                </div>
                             </button>
                         </div>
                     </div>
