@@ -543,9 +543,109 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
     
     const insertList = (listType) => {
         const selection = window.getSelection();
+        if (selection.rangeCount === 0) return;
+        
         const range = selection.getRangeAt(0);
         
-        // Get the current line/block element
+        // Check if we have text selected across multiple lines/blocks
+        if (!range.collapsed) {
+            // Get all block elements within the selection
+            const selectedBlocks = [];
+            const walker = document.createTreeWalker(
+                range.commonAncestorContainer,
+                NodeFilter.SHOW_ELEMENT,
+                {
+                    acceptNode: function(node) {
+                        // Check if this is a block element and intersects with our selection
+                        if (['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'BLOCKQUOTE', 'LI'].includes(node.tagName)) {
+                            const nodeRange = document.createRange();
+                            nodeRange.selectNode(node);
+                            
+                            // Check if this block intersects with our selection
+                            if (range.intersectsNode(node)) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }
+                        return NodeFilter.FILTER_SKIP;
+                    }
+                }
+            );
+            
+            let currentNode;
+            while (currentNode = walker.nextNode()) {
+                // Double-check that this node is actually within our selection bounds
+                const nodeRange = document.createRange();
+                nodeRange.selectNode(currentNode);
+                if (range.intersectsNode(currentNode)) {
+                    selectedBlocks.push(currentNode);
+                }
+            }
+            
+            // If we found multiple blocks, convert them all to list items
+            if (selectedBlocks.length > 1) {
+                // Create the list element
+                const listElement = document.createElement(listType.toUpperCase());
+                const listItems = [];
+                
+                // Convert each block to a list item
+                selectedBlocks.forEach((block, index) => {
+                    const textContent = block.textContent || '';
+                    if (textContent.trim()) { // Only create list items for non-empty blocks
+                        const listItem = document.createElement('LI');
+                        listItem.innerHTML = block.innerHTML || textContent;
+                        listElement.appendChild(listItem);
+                        listItems.push(listItem);
+                    }
+                });
+                
+                if (listItems.length > 0) {
+                    // Replace the first selected block with the list
+                    selectedBlocks[0].parentNode.replaceChild(listElement, selectedBlocks[0]);
+                    
+                    // Remove the other selected blocks
+                    for (let i = 1; i < selectedBlocks.length; i++) {
+                        if (selectedBlocks[i].parentNode) {
+                            selectedBlocks[i].parentNode.removeChild(selectedBlocks[i]);
+                        }
+                    }
+                    
+                    // Set cursor at the end of the last list item
+                    if (listItems.length > 0) {
+                        const lastItem = listItems[listItems.length - 1];
+                        const newRange = document.createRange();
+                        newRange.selectNodeContents(lastItem);
+                        newRange.collapse(false);
+                        selection.removeAllRanges();
+                        selection.addRange(newRange);
+                    }
+                    
+                    return;
+                }
+            } else if (selectedBlocks.length === 1) {
+                // Handle single block selection - fall through to existing logic
+                const currentElement = selectedBlocks[0];
+                const textContent = currentElement.textContent || '';
+                
+                // Create new list element
+                const listElement = document.createElement(listType.toUpperCase());
+                const listItem = document.createElement('LI');
+                listItem.innerHTML = currentElement.innerHTML || textContent || 'List item';
+                listElement.appendChild(listItem);
+                
+                // Replace the current element
+                currentElement.parentNode.replaceChild(listElement, currentElement);
+                
+                // Set cursor at the end of the list item
+                const newRange = document.createRange();
+                newRange.selectNodeContents(listItem);
+                newRange.collapse(false);
+                selection.removeAllRanges();
+                selection.addRange(newRange);
+                return;
+            }
+        }
+        
+        // Handle cursor position (no selection) - original logic
         let currentElement = range.commonAncestorContainer;
         if (currentElement.nodeType === Node.TEXT_NODE) {
             currentElement = currentElement.parentElement;
@@ -564,7 +664,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
             // Create new list element
             const listElement = document.createElement(listType.toUpperCase());
             const listItem = document.createElement('LI');
-            listItem.textContent = textContent || 'List item';
+            listItem.innerHTML = currentElement.innerHTML || textContent || 'List item';
             listElement.appendChild(listItem);
             
             // Replace the current element
@@ -587,9 +687,163 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
     
     const insertCheckList = () => {
         const selection = window.getSelection();
+        if (selection.rangeCount === 0) return;
+        
         const range = selection.getRangeAt(0);
         
-        // Get the current line/block element
+        // Check if we have text selected across multiple lines/blocks
+        if (!range.collapsed) {
+            // Get all block elements within the selection
+            const selectedBlocks = [];
+            const walker = document.createTreeWalker(
+                range.commonAncestorContainer,
+                NodeFilter.SHOW_ELEMENT,
+                {
+                    acceptNode: function(node) {
+                        // Check if this is a block element and intersects with our selection
+                        if (['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'BLOCKQUOTE', 'LI'].includes(node.tagName)) {
+                            const nodeRange = document.createRange();
+                            nodeRange.selectNode(node);
+                            
+                            // Check if this block intersects with our selection
+                            if (range.intersectsNode(node)) {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                        }
+                        return NodeFilter.FILTER_SKIP;
+                    }
+                }
+            );
+            
+            let currentNode;
+            while (currentNode = walker.nextNode()) {
+                // Double-check that this node is actually within our selection bounds
+                const nodeRange = document.createRange();
+                nodeRange.selectNode(currentNode);
+                if (range.intersectsNode(currentNode)) {
+                    selectedBlocks.push(currentNode);
+                }
+            }
+            
+            // If we found multiple blocks, convert them all to checklist items
+            if (selectedBlocks.length > 1) {
+                // Create the checklist element
+                const checklistElement = document.createElement('ul');
+                checklistElement.className = 'checklist';
+                const listItems = [];
+                
+                // Convert each block to a checklist item
+                selectedBlocks.forEach((block) => {
+                    const textContent = block.textContent || '';
+                    if (textContent.trim()) { // Only create checklist items for non-empty blocks
+                        const listItem = document.createElement('li');
+                        listItem.className = 'checklist-item';
+                        
+                        // Create checkbox and text content
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.className = 'checklist-checkbox';
+                        checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
+                        
+                        const textSpan = document.createElement('span');
+                        textSpan.innerHTML = block.innerHTML || textContent;
+                        textSpan.contentEditable = true;
+                        textSpan.style.cssText = 'outline: none; display: inline-block; min-width: 1px;';
+                        
+                        listItem.appendChild(checkbox);
+                        listItem.appendChild(textSpan);
+                        checklistElement.appendChild(listItem);
+                        listItems.push({ listItem, textSpan });
+                    }
+                });
+                
+                if (listItems.length > 0) {
+                    // Replace the first selected block with the checklist
+                    selectedBlocks[0].parentNode.replaceChild(checklistElement, selectedBlocks[0]);
+                    
+                    // Remove the other selected blocks
+                    for (let i = 1; i < selectedBlocks.length; i++) {
+                        if (selectedBlocks[i].parentNode) {
+                            selectedBlocks[i].parentNode.removeChild(selectedBlocks[i]);
+                        }
+                    }
+                    
+                    // Set cursor in the last text span
+                    setTimeout(() => {
+                        const lastItem = listItems[listItems.length - 1];
+                        lastItem.textSpan.focus();
+                        const newRange = document.createRange();
+                        const newSelection = window.getSelection();
+                        
+                        // Select all content in the span and collapse to end
+                        newRange.selectNodeContents(lastItem.textSpan);
+                        newRange.collapse(false);
+                        newSelection.removeAllRanges();
+                        newSelection.addRange(newRange);
+                    }, 0);
+                    
+                    return;
+                }
+            } else if (selectedBlocks.length === 1) {
+                // Handle single block selection - fall through to existing logic
+                const currentElement = selectedBlocks[0];
+                const textContent = currentElement.textContent || '';
+                
+                // Create new checklist element
+                const checklistElement = document.createElement('ul');
+                checklistElement.className = 'checklist';
+                const listItem = document.createElement('li');
+                listItem.className = 'checklist-item';
+                
+                // Create checkbox and text content
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'checklist-checkbox';
+                checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
+                
+                const textSpan = document.createElement('span');
+                textSpan.innerHTML = currentElement.innerHTML || textContent;
+                textSpan.contentEditable = true;
+                textSpan.style.cssText = 'outline: none; display: inline-block; min-width: 1px;';
+                if (!textContent) {
+                    textSpan.innerHTML = '&nbsp;'; // Use non-breaking space for empty spans
+                }
+                
+                listItem.appendChild(checkbox);
+                listItem.appendChild(textSpan);
+                checklistElement.appendChild(listItem);
+                
+                // Replace the current element
+                currentElement.parentNode.replaceChild(checklistElement, currentElement);
+                
+                // Set cursor in the text span
+                setTimeout(() => {
+                    textSpan.focus();
+                    const newRange = document.createRange();
+                    const newSelection = window.getSelection();
+                    
+                    // Select all content in the span and collapse to start
+                    newRange.selectNodeContents(textSpan);
+                    newRange.collapse(false);
+                    newSelection.removeAllRanges();
+                    newSelection.addRange(newRange);
+                    
+                    // Clear the non-breaking space when user starts typing (only if it was empty)
+                    if (!textContent) {
+                        const clearPlaceholder = () => {
+                            if (textSpan.innerHTML === '&nbsp;') {
+                                textSpan.innerHTML = '';
+                            }
+                            textSpan.removeEventListener('input', clearPlaceholder);
+                        };
+                        textSpan.addEventListener('input', clearPlaceholder);
+                    }
+                }, 0);
+                return;
+            }
+        }
+        
+        // Handle cursor position (no selection) - original logic
         let currentElement = range.commonAncestorContainer;
         if (currentElement.nodeType === Node.TEXT_NODE) {
             currentElement = currentElement.parentElement;
@@ -618,7 +872,7 @@ const createSimpleRichEditor = (container, initialContent, onChange) => {
             checkbox.style.cssText = 'margin-right: 8px; cursor: pointer;';
             
             const textSpan = document.createElement('span');
-            textSpan.textContent = textContent || '';
+            textSpan.innerHTML = currentElement.innerHTML || textContent;
             textSpan.contentEditable = true;
             textSpan.style.cssText = 'outline: none; display: inline-block; min-width: 1px;';
             if (!textContent) {
