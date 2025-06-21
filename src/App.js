@@ -4,6 +4,7 @@ import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, on
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc, addDoc, Timestamp, getDocs, query, where, orderBy, serverTimestamp } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
+import { formatDistanceToNow } from 'date-fns';
 import { storage } from './firebase';
 
 // Main App component
@@ -7861,81 +7862,87 @@ Answer conversational questions directly in the chat. Only create documents when
                     </div>
                 )}
 
-                {/* "Find New Insights" Button */}
-                <button
-                    onClick={handleFindInsights}
-                    className={`px-3 py-2 rounded-md text-sm font-medium w-full mt-4
-                        ${findingInsights ? 'bg-gray-400 cursor-not-allowed' : (isDarkMode ? 'bg-purple-600 hover:bg-purple-700' : 'bg-purple-500 hover:bg-purple-600')} text-white`}
-                    disabled={findingInsights || !userId || !db} // Disable button if loading or not authenticated/DB not ready
-                >
-                    {findingInsights ? 'Finding Insights...' : 'Find New Insights'}
-                </button>
 
-                {/* Display Proactive AI Insights */}
+
+                                {/* Display Proactive AI Insights */}
                 {proactiveInsights.length > 0 && (
-                    <div className={`mt-6 p-4 rounded-md shadow-inner
+                    <div className={`mt-6 p-4 rounded-lg shadow-lg
                         ${isDarkMode ? 'bg-gray-800' : 'bg-blue-50'} text-gray-800 dark:text-gray-200`}>
-                        <h3 className="font-semibold text-lg mb-3 flex items-center">
-                            {/* Icon for Insights (e.g., a lightbulb or sparkle) */}
-                            <svg className="w-5 h-5 mr-2 text-blue-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2h2a1 1 0 000-2H9zm1-7a1 1 0 00-1 1v1a1 1 0 102 0V3a1 1 0 00-1-1zM5.05 4.95a1 1 0 00-1.414 1.414l.707.707a1 1 0 101.414-1.414l-.707-.707zm-.707 9.9l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zM9 16a1 1 0 100-2h2a1 1 0 100 2H9zm6.05-2.05a1 1 0 00-1.414-1.414l-.707.707a1 1 0 001.414 1.414l.707-.707zm-2.293-2.293a1 1 0 00-1.414 0l-4 4a1 1 0 000 1.414l4 4a1 1 0 001.414 0l4-4a1 1 0 000-1.414l-4-4z" clipRule="evenodd"></path></svg>
-                            New AI Insights:
+                        <h3 className="font-semibold text-lg mb-4 flex items-center">
+                            {/* Main Insights Header Icon */}
+                            <svg className="w-6 h-6 mr-2 text-blue-400" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                            New AI Insights
                         </h3>
-                        {/* Map through each insight to display it */}
+
+                        {/* Map through each insight to display it as a card */}
                         {proactiveInsights.map(insight => (
-                            <div key={insight.id} className={`mb-3 p-3 rounded-md shadow-sm
-                                ${isDarkMode ? 'bg-gray-700 text-gray-200' : 'bg-white text-gray-800'} border border-transparent`}>
-                                <h4 className="font-medium text-md">{insight.title}</h4>
-                                <p className="text-sm mt-1 mb-2 opacity-90">{insight.description}</p>
+                            <div key={insight.id} className={`mb-4 p-4 rounded-lg shadow-md border
+                                ${isDarkMode ? 'bg-gray-700 border-gray-600 text-gray-100' : 'bg-white border-gray-200 text-gray-800'}
+                                hover:shadow-lg transition-shadow duration-200`}>
 
-                                {/* Display Related Documents/Files */}
+                                <div className="flex items-center mb-2">
+                                    {/* Insight Type Icon (e.g., spark, link, lightbulb) */}
+                                    <span className="text-xl mr-2 text-yellow-400">✨</span>
+                                    <h4 className="font-bold text-md leading-tight flex-grow">{insight.title}</h4>
+                                    {/* Optional: Time since insight generated */}
+                                    {insight.createdAt && (
+                                        <span className="text-xs text-gray-400 dark:text-gray-500 ml-2">
+                                            {formatDistanceToNow(insight.createdAt.toDate ? insight.createdAt.toDate() : new Date(insight.createdAt), { addSuffix: true })}
+                                        </span>
+                                    )}
+                                </div>
+
+                                <p className="text-sm opacity-90 mb-3">{insight.description}</p>
+
+                                {/* Related Documents Section */}
                                 {insight.relatedDocumentIds && insight.relatedDocumentIds.length > 0 && (
-                                    <div className="text-xs mt-2 flex flex-wrap gap-1">
-                                        <span className="font-semibold text-gray-500 dark:text-gray-400">Related:</span>
-                                        {insight.relatedDocumentIds.map(docId => {
-                                            // Try to find the document in 'documents' (notes)
-                                            const relatedNote = documents.find(d => d.id === docId);
-                                            // Or in 'uploadedFiles'
-                                            const relatedFile = uploadedFiles.find(f => f.id === docId);
-
-                                            if (relatedNote) {
-                                                return (
+                                    <div className="mt-3">
+                                        <span className="font-semibold text-xs uppercase text-gray-500 dark:text-gray-400 mb-2 block">Related Documents:</span>
+                                        <div className="flex flex-wrap gap-2">
+                                            {insight.relatedDocumentIds.map(docId => {
+                                                const relatedNote = documents.find(d => d.id === docId);
+                                                const relatedFile = uploadedFiles.find(f => f.id === docId);
+                                                const isNote = !!relatedNote;
+                                                const isFile = !!relatedFile;
+                                                const docTitle = isNote ? (relatedNote.title || 'Untitled Note') : (isFile ? (relatedFile.fileName || 'Untitled File') : 'Unknown Document');
+                                                const docIcon = isNote ? (
+                                                    relatedNote.icon && relatedNote.icon.startsWith('http') ?
+                                                        <img src={relatedNote.icon} alt="icon" className="w-4 h-4 object-cover rounded-sm mr-1" /> :
+                                                        (relatedNote.icon || <svg className="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h8a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 10a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm0-3a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>)
+                                                ) : (isFile ? (
+                                                    <svg className="w-4 h-4 mr-1 text-gray-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.414L14.586 5A2 2 0 0115 5.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 0v12h8V6h-2a2 2 0 01-2-2V4H6z" clipRule="evenodd"></path></svg>
+                                                ) : (
+                                                    <svg className="w-4 h-4 mr-1 text-gray-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM6 10a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1z" clipRule="evenodd"></path></svg>
+                                                ));
+                                                
+                                                return (isNote || isFile) ? (
                                                     <button
                                                         key={docId}
-                                                        onClick={() => handleDocumentSelect(docId)} // Selects the note in the editor
-                                                        className={`px-2 py-1 rounded-full text-xs
-                                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-100 hover:bg-gray-200'} text-gray-800 dark:text-gray-200`}
-                                                        title={`View Note: ${relatedNote.title || 'Untitled'}`}
+                                                        onClick={() => {
+                                                            if (isNote) handleDocumentSelect(docId);
+                                                            else if (isFile) window.open(relatedFile.downloadURL, '_blank');
+                                                        }}
+                                                        className={`flex items-center px-2.5 py-1 rounded-full text-xs font-medium
+                                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-100 hover:bg-gray-200'}
+                                                            ${isNote ? 'text-blue-700 dark:text-blue-300' : 'text-purple-700 dark:text-purple-300'}
+                                                            transition-colors duration-150`}
                                                     >
-                                                        {relatedNote.title || 'Untitled Note'}
+                                                        {docIcon}
+                                                        <span className="truncate max-w-[120px]">{docTitle}</span>
                                                     </button>
-                                                );
-                                            } else if (relatedFile) {
-                                                return (
-                                                    <a
-                                                        key={docId}
-                                                        href={relatedFile.downloadURL} // Direct link to open file in new tab
-                                                        target="_blank"
-                                                        rel="noopener noreferrer"
-                                                        className={`px-2 py-1 rounded-full text-xs underline
-                                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-100 hover:bg-gray-200'} text-gray-800 dark:text-gray-200`}
-                                                        title={`Open File: ${relatedFile.fileName}`}
-                                                    >
-                                                        {relatedFile.fileName}
-                                                    </a>
-                                                );
-                                            }
-                                            return null; // If document not found
-                                        })}
+                                                ) : null;
+                                            })}
+                                        </div>
                                     </div>
                                 )}
 
-                                {/* Action buttons for the insight */}
-                                <div className="flex justify-end gap-2 mt-3">
-                                    {/* For MVP, only a Dismiss button */}
+                                {/* Actions */}
+                                <div className="flex justify-end gap-2 mt-4">
                                     <button
                                         onClick={() => handleDismissInsight(insight.id)}
-                                        className={`px-3 py-1 rounded-md text-sm
-                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500' : 'bg-gray-200 hover:bg-gray-300'} text-gray-800 dark:text-gray-200 transition-colors`}
+                                        className={`px-4 py-2 rounded-md text-sm font-medium
+                                            ${isDarkMode ? 'bg-gray-600 hover:bg-gray-500 text-gray-200' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}
+                                            transition-colors duration-150`}
                                     >
                                         Dismiss
                                     </button>
@@ -8106,7 +8113,7 @@ Answer conversational questions directly in the chat. Only create documents when
                                                 setLlmResponse("No content on the page to expand.");
                                             }
                                         }}
-                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200 mb-1
                                             ${isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100'}`}
                                     >
                                         <span className="mr-2 text-purple-500">
@@ -8116,6 +8123,28 @@ Answer conversational questions directly in the chat. Only create documents when
                                         <div>
                                             <div className="text-sm font-medium">Expand Page</div>
                                             <div className="text-xs text-gray-500 dark:text-gray-400">Develop current content</div>
+                                        </div>
+                                    </button>
+
+                                    {/* Find New Insights */}
+                                    <button
+                                        onClick={() => {
+                                            setShowQuickActionsModal(false);
+                                            handleFindInsights();
+                                        }}
+                                        disabled={findingInsights || !userId || !db}
+                                        className={`flex items-center w-full px-2 py-1.5 rounded-md text-left transition-colors duration-200
+                                            ${findingInsights ? 'opacity-50 cursor-not-allowed' : (isDarkMode ? 'hover:bg-gray-700' : 'hover:bg-gray-100')}`}
+                                    >
+                                        <span className="mr-2 text-orange-500">
+                                            {/* Insights/Connection Icon */}
+                                            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                                        </span>
+                                        <div>
+                                            <div className="text-sm font-medium">
+                                                {findingInsights ? 'Finding Insights...' : 'Find New Insights'}
+                                            </div>
+                                            <div className="text-xs text-gray-500 dark:text-gray-400">Discover connections in your notes</div>
                                         </div>
                                     </button>
                                 </div>
